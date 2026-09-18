@@ -1,0 +1,5 @@
+create_test(number_parsing_test number_parsing.cpp AsLib)
+create_test(directive_parsing_test directive_parsing.cpp AsLib)
+create_test(instruction_parsing_test instruction_parsing.cpp AsLib)
+create_test(generic_parsing_test generic_parsing.cpp AsLib)
+

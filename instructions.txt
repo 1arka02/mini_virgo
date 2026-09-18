@@ -1,0 +1,37 @@
+lui:    {opcode: "01101 11"}
+auipc:  {opcode: "00101 11"}
+
+addi:   {opcode: "00100 11", funct3: "000"}
+slti:   {opcode: "00100 11", funct3: "010"}
+xori:   {opcode: "00100 11", funct3: "100"}
+ori:    {opcode: "00100 11", funct3: "110"}
+andi:   {opcode: "00100 11", funct3: "111"}
+slli:   {opcode: "00100 11", funct3: "001", funct7: "00000 0X"}
+srli:   {opcode: "00100 11", funct3: "101", funct7: "00000 0X"}
+srai:   {opcode: "00100 11", funct3: "101", funct7: "01000 0X"}
+
+add:    {opcode: "01100 11", funct3: "000", funct7: "00000 00"}
+sub:    {opcode: "01100 11", funct3: "000", funct7: "01000 00"}
+sll:    {opcode: "01100 11", funct3: "001", funct7: "00000 00"}
+slt:    {opcode: "01100 11", funct3: "010", funct7: "00000 00"}
+xor:    {opcode: "01100 11", funct3: "100", funct7: "00000 00"}
+srl:    {opcode: "01100 11", funct3: "101", funct7: "00000 00"}
+sra:    {opcode: "01100 11", funct3: "101", funct7: "01000 00"}
+or:     {opcode: "01100 11", funct3: "110", funct7: "00000 00"}
+and:    {opcode: "01100 11", funct3: "111", funct7: "00000 00"}
+
+lb:     {opcode: "00000 11", funct3: "000"}
+lh:     {opcode: "00000 11", funct3: "001"}
+lw:     {opcode: "00000 11", funct3: "010"}
+
+sb:     {opcode: "01000 11", funct3: "000"}
+sh:     {opcode: "01000 11", funct3: "001"}
+sw:     {opcode: "01000 11", funct3: "010"}
+
+jal:    {opcode: "11011 11"}
+jalr:   {opcode: "11001 11", funct3: "000"}
+beq:    {opcode: "11000 11", funct3: "000"}
+bne:    {opcode: "11000 11", funct3: "001"}
+blt:    {opcode: "11000 11", funct3: "100"}
+bge:    {opcode: "11000 11", funct3: "101"}
+

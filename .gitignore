@@ -1,0 +1,6 @@
+.cache
+build
+test_build
+sim_build
+__pycache__
+results.xml
