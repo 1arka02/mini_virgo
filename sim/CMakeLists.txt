@@ -15,3 +15,7 @@ endif()
 target_compile_options(${EXEC_NAME} PRIVATE ${MAIN_FLAGS})
 
 target_link_libraries(${EXEC_NAME} GPU Sim AsLib)
+
+add_executable(example_gemm_run ../example_gemm_run.cpp)
+target_compile_options(example_gemm_run PRIVATE ${MAIN_FLAGS})
+target_link_libraries(example_gemm_run GPU Sim)

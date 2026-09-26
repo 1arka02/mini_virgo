@@ -417,6 +417,25 @@ struct InstructionBits {
         return *this;
     }
 
+    inline auto set_b_imm13(IData imm13) -> InstructionBits& {
+        int32_t signed_imm = static_cast<int32_t>(imm13);
+        assert_or_err(signed_imm >= -4096 && signed_imm <= 4095, Error(std::format("Invalid immediate: '{}', expected 13-bit.", imm13)));
+        auto imm_b = std::bitset<32>{};
+        auto imm = std::bitset<13>(imm13);
+        
+        imm_b[31] = imm[12];
+        for(auto i = 25u; i <= 30u; i++) {
+            imm_b[i] = imm[i - 20];
+        }
+        for(auto i = 8u; i <= 11u; i++) {
+            imm_b[i] = imm[i - 7];
+        }
+        imm_b[7] = imm[11];
+        
+        bits |= imm_b.to_ulong();
+        return *this;
+    }
+
     constexpr auto make_scalar() -> InstructionBits& {
         bits |= (IData)1 << 6u;
         return *this;
@@ -448,9 +467,7 @@ constexpr auto create_jtype_instruction(Opcode opcode, Register rd, IData imm21)
     return InstructionBits().set_opcode(opcode).set_rd(rd).set_imm21(imm21);
 }
 constexpr auto create_btype_instruction(Opcode opcode, Funct3 funct3, Register rs1, Register rs2, IData imm12) -> InstructionBits {
-    // TODO: Implement this
-    return InstructionBits{};
-    /*return Instruction().set_opcode(opcode).set_funct3(funct3).set_rs1(rs1).set_rs2(rs2);*/
+    return InstructionBits().set_opcode(opcode).set_funct3(funct3).set_rs1(rs1).set_rs2(rs2).set_b_imm13(imm12);
 }
 constexpr auto create_stype_instruction(Opcode opcode, Funct3 funct3, Register rs1, Register rs2, IData imm12) -> InstructionBits {
     return InstructionBits().set_opcode(opcode).set_funct3(funct3).set_rs1(rs1).set_rs2(rs2).set_imm12(imm12);

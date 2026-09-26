@@ -1,4 +1,4 @@
-# smol-GPU (Virgo Architecture)
+# mini-Virgo(Virgo Architecture)
 
 An educational, system-verilog implementation of a parallel processor, modified to include the **Virgo micro-architecture** (a dedicated cluster-level matrix unit).
 
@@ -6,7 +6,7 @@ An educational, system-verilog implementation of a parallel processor, modified 
 
 ## Overview and GPU Architecture
 
-`smol-gpu` is a SystemVerilog RTL model of a simple RISC-V-like GPU. It explores modern GPU design concepts, specifically focusing on the integration of systolic arrays for matrix operations (GEMM).
+`mini-Virgo` is a SystemVerilog RTL model of a simple RISC-V-like GPU. It explores modern GPU design concepts, specifically focusing on the integration of systolic arrays for matrix operations (GEMM).
 
 ### The Virgo Architecture
 Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cores for computation. The **Virgo** architecture disaggregates this by introducing a dedicated **Matrix Unit** (a systolic array) at the cluster level.
@@ -66,7 +66,7 @@ This will generate the `simulator` executable in `build/sim/` and the test execu
 The simulator reads an assembly file, assembles it, and runs the RTL simulation.
 
 ```bash
-cd /path/to/smol-gpu
+cd /path/to/mini_virgo
 ./build/sim/simulator example.as
 ```
 *(Note: If you have a custom assembly file for GEMM, like `example_gemm.as`, simply pass it as the argument instead).*

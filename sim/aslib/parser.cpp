@@ -116,6 +116,10 @@ auto Parser::parse_instruction() -> std::optional<Result> {
         return parse_utype_instruction(mnemonic);
     }
 
+    if (parser::is_btype(mnemonic.get_name())) {
+        return parse_branch_instruction(mnemonic);
+    }
+
     if (mnemonic.get_name() == sim::MnemonicName::JALR) {
         return parse_jalr_instruction(mnemonic);
     }
@@ -255,6 +259,39 @@ auto Parser::parse_store_instruction(const sim::Mnemonic& mnemonic) -> std::opti
     };
 
     return instruction;
+}
+
+auto Parser::parse_branch_instruction(const sim::Mnemonic& mnemonic) -> std::optional<parser::Instruction> {
+    EXPECT_OR_RETURN(rs1, token::Register);
+    EXPECT_OR_RETURN(comma1, token::Comma);
+    EXPECT_OR_RETURN(rs2, token::Register);
+    EXPECT_OR_RETURN(comma2, token::Comma);
+    EXPECT_OR_RETURN(next, token::LabelRef, token::Immediate);
+
+    CHECK_REG(*rs1, mnemonic.is_scalar());
+    CHECK_REG(*rs2, mnemonic.is_scalar());
+
+    if (next->is_of_type<token::LabelRef>()) {
+        return parser::Instruction {
+            .label = {},
+            .mnemonic = mnemonic,
+            .operands = parser::BtypeOperands {
+                .rs1 = rs1->as<token::Register>().register_data,
+                .rs2 = rs2->as<token::Register>().register_data,
+                .immediate_or_label_ref = next->as<token::LabelRef>()
+            }
+        };
+    }
+
+    return parser::Instruction {
+        .label = {},
+        .mnemonic = mnemonic,
+        .operands = parser::BtypeOperands {
+            .rs1 = rs1->as<token::Register>().register_data,
+            .rs2 = rs2->as<token::Register>().register_data,
+            .immediate_or_label_ref = next->as<token::Immediate>()
+        }
+    };
 }
 
 auto Parser::parse_jal_instruction(const sim::Mnemonic& mnemonic) -> std::optional<parser::Instruction> {

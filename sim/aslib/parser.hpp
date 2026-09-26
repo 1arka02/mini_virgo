@@ -58,8 +58,18 @@ struct JalrOperands {
     ImmediateOrLabelref immediate_or_label_ref;
 };
 
+struct BtypeOperands {
+    sim::Register rs1;
+    sim::Register rs2;
+    ImmediateOrLabelref immediate_or_label_ref;
+};
+
 /*using Operands = std::variant<Rtype, Itype, Load, Store, Branch, Jump, Utype, Sx>;*/
-using Operands = std::variant<ItypeOperands, RtypeOperands, StypeOperands, UtypeOperands, JtypeOperands, JalrOperands>;
+using Operands = std::variant<ItypeOperands, RtypeOperands, StypeOperands, UtypeOperands, JtypeOperands, JalrOperands, BtypeOperands>;
+
+constexpr auto is_btype(sim::MnemonicName name) -> bool {
+    return name == sim::MnemonicName::BEQ || name == sim::MnemonicName::BNE || name == sim::MnemonicName::BLT || name == sim::MnemonicName::BGE;
+}
 
 constexpr auto is_itype_arithmetic(sim::MnemonicName name) -> bool {
     return name == sim::MnemonicName::ADDI || name == sim::MnemonicName::SLTI || name == sim::MnemonicName::XORI ||
@@ -119,10 +129,14 @@ struct Instruction {
                   [&result](const parser::UtypeOperands &operands) {
                       result += operands.rd.to_str() + ", " + std::to_string(operands.imm20.value);
                   },
-                  /*[&result](const parser::BtypeOperands &operands) {*/
-                  /*    result += operands.rs1.to_str() + ", " + operands.rs2.to_str() + ", " +*/
-                  /*              std::to_string(operands.imm12);*/
-                  /*},*/
+                  [&result](const parser::BtypeOperands &operands) {
+                      result += operands.rs1.to_str() + ", " + operands.rs2.to_str() + ", ";
+                      if (std::holds_alternative<token::LabelRef>(operands.immediate_or_label_ref)) {
+                          result += std::get<token::LabelRef>(operands.immediate_or_label_ref).label_name;
+                      } else {
+                          result += std::to_string(std::get<token::Immediate>(operands.immediate_or_label_ref).value);
+                      }
+                  },
                   [&result](const parser::JtypeOperands &operands) {
                       result += operands.rd.to_str() + ", " + std::to_string(operands.imm20.value);
                   },

@@ -1,5 +1,5 @@
 .blocks 1
-.warps 4
+.warps 1
 
 # Simple test: load thread id, add 10, and store to memory
 addi x5, x1, 10

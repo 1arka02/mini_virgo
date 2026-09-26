@@ -41,6 +41,17 @@ auto translate_to_binary(const as::parser::Program& program) -> std::vector<sim:
                     const auto &immediate = std::get<token::Immediate>(operands.immediate_or_label_ref);
                     instruction_bits = sim::instructions::jalr(operands.rd, operands.rs1, immediate.value);
                 }
+            },
+                [&](const as::parser::BtypeOperands &operands) {
+                if (std::holds_alternative<token::LabelRef>(operands.immediate_or_label_ref)) {
+                    const auto &label_token = std::get<token::LabelRef>(operands.immediate_or_label_ref);
+                    const auto target = program.label_mappings.at(label_token.label_name);
+                    const int offset = static_cast<int>(target) - static_cast<int>(i);
+                    instruction_bits = sim::instructions::create_btype_instruction(opcode, funct3, operands.rs1, operands.rs2, static_cast<IData>(offset));
+                } else {
+                    const auto &immediate = std::get<token::Immediate>(operands.immediate_or_label_ref);
+                    instruction_bits = sim::instructions::create_btype_instruction(opcode, funct3, operands.rs1, operands.rs2, (IData)immediate.value);
+                }
             }
 
         }, program.instructions[i].operands);
