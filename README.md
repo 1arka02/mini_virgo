@@ -240,6 +240,63 @@ Each resource has a **fixed-priority arbiter** — a 3-state FSM (`IDLE → SERV
 
 The **response demux** routes `ready` and `data` signals back to the specific LSU that won arbitration. Only the winning LSU's `core_read_ready` / `core_write_ready` is asserted; all others see `0` (stalled) until the current transaction completes.
 
+### Shared Memory
+
+```mermaid
+flowchart TB
+    subgraph Clients ["Memory Clients"]
+        direction LR
+        PortA["SIMT Cores<br/>(via Cluster Interconnect)"]
+        PortB["Matrix Unit<br/>(Dedicated Path)"]
+    end
+
+    subgraph SharedMem ["Shared Memory (shared_memory.sv)"]
+        direction TB
+        Bank["Dual-Port SRAM Array<br/>(MEM_WORDS x DATA_WIDTH)"]
+    end
+
+    PortA <-->|"Port A<br/>core_read/write_valid<br/>address, data, ready"| Bank
+    PortB <-->|"Port B<br/>mu_read_valid<br/>address, data, ready"| Bank
+```
+
+The Shared Memory (`shared_memory.sv`) provides a high-throughput, low-latency dual-ported scratchpad memory local to each cluster. Port A is mapped to the cluster interconnect and serves read and write requests from the SIMT cores. Port B provides a dedicated read-only path directly to the Matrix Unit, ensuring that matrix data tiles can be streamed into the systolic array without interfering with core memory operations or arbitration bottlenecks.
+
+### Memory Controller
+
+```mermaid
+flowchart TB
+    subgraph Consumers ["Consumers (NUM_CONSUMERS)"]
+        direction LR
+        C_Req["consumer_read_valid<br/>consumer_write_valid<br/>address & data"]
+    end
+
+    subgraph MemCtrl ["Memory Controller (mem_controller.sv)"]
+        direction TB
+        Arbiter{"Channel Arbiter<br/>(NUM_CHANNELS)"}
+        
+        subgraph FSMs ["Channel FSMs"]
+            direction LR
+            IDLE(["IDLE"])
+            WAITING(["WAITING<br/>(READ/WRITE)"])
+            RELAYING(["RELAYING<br/>(READ/WRITE)"])
+            IDLE -->|"request found"| WAITING
+            WAITING -->|"mem_ready"| RELAYING
+            RELAYING -->|"consumer ack"| IDLE
+        end
+        Arbiter -->|"Assigns requests to<br/>available channels"| FSMs
+    end
+
+    subgraph External ["External Memory Interface"]
+        Mem["Global Memory Channel"]
+    end
+
+    C_Req --> Arbiter
+    FSMs <-->|"mem_read/write_valid<br/>address, data, ready"| Mem
+    FSMs -->|"consumer_ready<br/>consumer_read_data"| Consumers
+```
+
+The Memory Controller (`mem_controller.sv`) manages concurrent accesses to global memory (both instruction and data memory) from numerous consumers (Fetchers or LSUs). It instantiates multiple memory channels (`NUM_CHANNELS`) and tracks their state using independent FSMs. When a channel is idle, it scans the consumers to find a pending read or write request, locks onto it, and dispatches it to the external memory interface. Once the memory responds, the channel relays the data or acknowledgment back to the specific consumer and waits for a consumer acknowledgment before returning to the idle state.
+
 ---
 
 ## Directory Structure
