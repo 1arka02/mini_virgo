@@ -103,6 +103,68 @@ Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cor
 *   **Branching:** Handled via execution masking.
 *   **Load-Store Unit (LSU):** Handles memory reads and writes, interacting with the cluster interconnect for shared/MMIO memory and the memory controller for global memory.
 
+### Matrix Unit
+
+![Matrix Unit Schematic](docs/images/multiply_unit.drawio.png)
+
+### Matrix Controller
+
+```mermaid
+flowchart TB
+    subgraph Inputs ["From Cluster Interconnect (MMIO Slave)"]
+        direction LR
+        WR["mmio_write_valid<br/>mmio_write_address<br/>mmio_write_data"]
+        RD["mmio_read_valid<br/>mmio_read_address"]
+    end
+
+    subgraph Controller ["Matrix Controller (matrix_controller.sv)"]
+        direction TB
+
+        subgraph RegFile ["MMIO Register File"]
+            direction LR
+            CTRL["REG_CTRL (0x0000)<br/>[0] START<br/>[1] ACCUMULATE<br/>[2] CLEAR_ACC"]
+            STATUS["REG_STATUS (0x0004)<br/>[0] BUSY<br/>[1] DONE (sticky)"]
+            DIMS["REG_DIM_M/N/K<br/>(0x0008 / 0x000C / 0x0010)<br/>Tile dimensions [3:0]"]
+            ADDRS["REG_ADDR_A/B/C<br/>(0x0014 / 0x0018 / 0x001C)<br/>Shared mem offsets"]
+            CYCLES["REG_CYCLES (0x0020)<br/>Cycle counter"]
+            SYNC["REG_SYNC (0x0024)<br/>HW Barrier: stalls<br/>read_ready while busy"]
+        end
+
+        WriteLogic["Write Decode<br/>Address → Register Update<br/>(single-cycle ack)"]
+        ReadLogic["Read Decode<br/>Address → Register Readback"]
+        SyncLogic{"SYNC Read?"}
+        BusyCheck{"mu_busy?"}
+    end
+
+    WR --> WriteLogic
+    WriteLogic --> CTRL
+    WriteLogic --> DIMS
+    WriteLogic --> ADDRS
+    WriteLogic --> STATUS
+
+    RD --> SyncLogic
+    SyncLogic -->|Yes| BusyCheck
+    BusyCheck -->|"Busy → stall<br/>(hold ready low)"| SyncLogic
+    BusyCheck -->|"Not busy → ack"| ReadOut["mmio_read_ready ✓<br/>mmio_read_data"]
+    SyncLogic -->|No| ReadLogic
+    ReadLogic --> ReadOut
+
+    subgraph MU ["To Matrix Unit (matrix_unit.sv)"]
+        direction LR
+        CtrlOut["mu_start (pulse)<br/>mu_accumulate<br/>mu_clear_acc (pulse)"]
+        DimsOut["mu_dim_m/n/k"]
+        AddrsOut["mu_addr_a/b/c"]
+        StatusIn["mu_busy<br/>mu_done<br/>mu_cycle_count"]
+    end
+
+    CTRL -->|"start / clear_acc<br/>(auto-clear pulses)"| CtrlOut
+    DIMS --> DimsOut
+    ADDRS --> AddrsOut
+    StatusIn -->|"feedback"| STATUS
+    StatusIn -->|"feedback"| CYCLES
+    StatusIn --> BusyCheck
+```
+
 ---
 
 ## Directory Structure
