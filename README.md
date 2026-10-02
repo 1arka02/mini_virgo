@@ -107,6 +107,8 @@ Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cor
 
 ![Matrix Unit Schematic](docs/images/multiply_unit.drawio.png)
 
+The Matrix Unit (`matrix_unit.sv`) is a systolic-array-based compute engine dedicated to General Matrix Multiply-Accumulate (GEMM). It reads tile data (matrices A and B) from shared memory via Port B, performs the multiply-accumulate through a configurable M×N×K pipeline, and writes the result (matrix C) back. An internal accumulator can be preserved across invocations (`accumulate` mode) or cleared (`clear_acc`), enabling tiled outer-product loops. A cycle counter tracks operation latency.
+
 ### Matrix Controller
 
 ```mermaid
@@ -164,6 +166,8 @@ flowchart TB
     StatusIn -->|"feedback"| CYCLES
     StatusIn --> BusyCheck
 ```
+
+The Matrix Controller (`matrix_controller.sv`) is an MMIO slave that exposes the matrix unit's configuration as a set of memory-mapped registers in the `0x8001_0000` address range. SIMT cores write tile dimensions (`DIM_M/N/K`), shared-memory base addresses (`ADDR_A/B/C`), and control bits (`START`, `ACCUMULATE`, `CLEAR_ACC`) through ordinary store instructions. Reads to `REG_STATUS` return the busy/done state. A special `REG_SYNC` register acts as a hardware barrier — the controller holds `read_ready` low while the matrix unit is busy, effectively stalling the requesting thread until the GEMM operation completes.
 
 ### Cluster Interconnect
 
@@ -226,6 +230,15 @@ flowchart TB
     ExtMem --> Demux
     Demux -->|"core_read_ready<br/>core_read_data<br/>core_write_ready"| CoreLSUs
 ```
+
+The Cluster Interconnect (`cluster_interconnect.sv`) demultiplexes memory requests from all core LSUs based on address:
+
+*   **Global Memory** (`< 0x8000_0000`): passed through directly — each LSU has its own external channel, so no arbitration is needed.
+*   **Shared Memory** (`0x8000_0000 – 0x8000_0FFF`) and **MMIO** (`0x8001_0000 – 0x8001_00FF`): both are single-ported resources, so concurrent access from multiple LSUs must be serialized.
+
+Each resource has a **fixed-priority arbiter** — a 3-state FSM (`IDLE → SERVING_READ / SERVING_WRITE → IDLE`). In `IDLE`, the arbiter scans LSUs starting from index 0; the first LSU with a matching request wins. Writes are checked before reads, giving store operations priority. Once granted, the arbiter stays in the serving state until the destination asserts `ready`, then returns to `IDLE`.
+
+The **response demux** routes `ready` and `data` signals back to the specific LSU that won arbitration. Only the winning LSU's `core_read_ready` / `core_write_ready` is asserted; all others see `0` (stalled) until the current transaction completes.
 
 ---
 
