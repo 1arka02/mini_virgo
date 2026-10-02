@@ -165,6 +165,68 @@ flowchart TB
     StatusIn --> BusyCheck
 ```
 
+### Cluster Interconnect
+
+```mermaid
+flowchart TB
+    subgraph CoreLSUs ["Core LSUs (NUM_LSUS)"]
+        direction LR
+        RReq["core_read_valid<br/>core_read_address"]
+        WReq["core_write_valid<br/>core_write_address<br/>core_write_data"]
+    end
+
+    subgraph Interconnect ["Cluster Interconnect (cluster_interconnect.sv)"]
+        direction TB
+
+        AddrDecode{"Address Decode<br/>per-LSU"}
+
+        subgraph SMArb ["Shared Memory Arbiter"]
+            direction TB
+            SM_IDLE(["ARB_IDLE"])
+            SM_SR(["ARB_SERVING_READ"])
+            SM_SW(["ARB_SERVING_WRITE"])
+            SM_IDLE -->|"write req found<br/>(priority)"| SM_SW
+            SM_IDLE -->|"read req found"| SM_SR
+            SM_SR -->|"sm_read_ready"| SM_IDLE
+            SM_SW -->|"sm_write_ready"| SM_IDLE
+        end
+
+        subgraph MMIOArb ["MMIO Arbiter"]
+            direction TB
+            MM_IDLE(["ARB_IDLE"])
+            MM_SR(["ARB_SERVING_READ"])
+            MM_SW(["ARB_SERVING_WRITE"])
+            MM_IDLE -->|"write req found<br/>(priority)"| MM_SW
+            MM_IDLE -->|"read req found"| MM_SR
+            MM_SR -->|"mmio_read_ready"| MM_IDLE
+            MM_SW -->|"mmio_write_ready"| MM_IDLE
+        end
+
+        Demux["Response Demux<br/>Route ready & data<br/>back to requesting LSU"]
+    end
+
+    RReq --> AddrDecode
+    WReq --> AddrDecode
+
+    AddrDecode -->|"addr < 0x8000_0000<br/>Global Memory"| ExtMem["Global Memory Controller<br/>(pass-through)"]
+    AddrDecode -->|"0x8000_0000 – 0x8000_0FFF<br/>Shared Memory"| SMArb
+    AddrDecode -->|"0x8001_0000 – 0x8001_00FF<br/>MMIO"| MMIOArb
+
+    subgraph Destinations ["Cluster-Local Ports"]
+        direction LR
+        SM["Shared Memory<br/>(Port A)"]
+        MMIO["Matrix Controller<br/>(MMIO Slave)"]
+    end
+
+    SMArb <-->|"sm_read/write"| SM
+    MMIOArb <-->|"mmio_read/write"| MMIO
+
+    SM --> Demux
+    MMIO --> Demux
+    ExtMem --> Demux
+    Demux -->|"core_read_ready<br/>core_read_data<br/>core_write_ready"| CoreLSUs
+```
+
 ---
 
 ## Directory Structure
