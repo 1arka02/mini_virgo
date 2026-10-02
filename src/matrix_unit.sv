@@ -100,7 +100,7 @@ module matrix_unit #(
             reg_n           <= '0;
             reg_k           <= '0;
             reg_addr_a      <= '0;
-            reg_addr_b      <= '0;
+            reg_addr_b      <= '0;re
             reg_addr_c      <= '0;
             reg_accumulate  <= 1'b0;
 

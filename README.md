@@ -9,6 +9,9 @@ An educational, system-verilog implementation of a parallel processor, modified 
 `mini-Virgo` is a SystemVerilog RTL model of a simple RISC-V-like GPU. It explores modern GPU design concepts, specifically focusing on the integration of systolic arrays for matrix operations (GEMM).
 
 ### The Virgo Architecture
+
+![Multiply Unit Schematic](docs/images/multiply_unit.drawio.png)
+
 Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cores for computation. The **Virgo** architecture disaggregates this by introducing a dedicated **Matrix Unit** (a systolic array) at the cluster level.
 
 *   **Cluster (SM) Level:** The GPU is divided into clusters. Each cluster contains multiple SIMD cores (`CORES_PER_CLUSTER`).
