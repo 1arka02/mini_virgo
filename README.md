@@ -10,29 +10,7 @@ An educational, system-verilog implementation of a parallel processor, modified 
 
 ### The Virgo Architecture
 
-```mermaid
-flowchart LR
-    subgraph Virgo Cluster [Virgo Cluster]
-        direction LR
-        Cores[SIMT Cores]
-        Interconnect[Cluster Interconnect]
-        SM[Shared Memory]
-        
-        subgraph MU [Matrix Unit]
-            direction TB
-            Regs[MMIO Controller]
-            MAC[Systolic Array]
-            Regs -->|Start/Config| MAC
-        end
-        
-        Cores -->|Memory/MMIO Requests| Interconnect
-        Interconnect -->|MMIO Writes| Regs
-        MAC <-->|Read A/B, Write C| SM
-        Interconnect <-->|Local Access| SM
-    end
-    
-    Interconnect <-->|Global Access| Global[Global Memory]
-```
+![Multiply Unit Schematic](docs/images/multiply_unit.drawio.png)
 
 Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cores for computation. The **Virgo** architecture disaggregates this by introducing a dedicated **Matrix Unit** (a systolic array) at the cluster level.
 
