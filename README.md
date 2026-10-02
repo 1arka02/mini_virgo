@@ -10,7 +10,85 @@ An educational, system-verilog implementation of a parallel processor, modified 
 
 ### The Virgo Architecture
 
-![Multiply Unit Schematic](docs/images/multiply_unit.drawio.png)
+```mermaid
+flowchart TB
+    %% ── Top Level ──
+    Host["Host / Kernel Config"]
+    Host -->|"execution_start + kernel_config"| Dispatcher
+
+    subgraph GPU ["GPU (gpu.sv)"]
+        Dispatcher["Dispatcher<br/>(dispatcher.sv)"]
+
+        subgraph Cluster0 ["Virgo Cluster (virgo_cluster.sv)"]
+            direction TB
+
+            subgraph Cores ["SIMT Sub-Cores"]
+                direction LR
+                subgraph Core0 ["Compute Core 0 (compute_core.sv)"]
+                    direction TB
+                    Warps0["Warps<br/>(warp scheduler)"]
+                    Fetch0["Fetcher"]
+                    Dec0["Decoder"]
+                    ALU0["ALU"]
+                    RF0["Vector & Scalar<br/>Register Files"]
+                    LSU0["LSUs<br/>(per-thread + scalar)"]
+                    Warps0 --> Fetch0 --> Dec0 --> ALU0
+                    Dec0 --> RF0
+                    Dec0 --> LSU0
+                end
+                subgraph Core1 ["Compute Core 1"]
+                    direction TB
+                    Warps1["Warps"]
+                    Fetch1["Fetcher"]
+                    Dec1["Decoder"]
+                    ALU1["ALU"]
+                    RF1["Register Files"]
+                    LSU1["LSUs"]
+                    Warps1 --> Fetch1 --> Dec1 --> ALU1
+                    Dec1 --> RF1
+                    Dec1 --> LSU1
+                end
+            end
+
+            Interconnect["Cluster Interconnect<br/>(cluster_interconnect.sv)<br/>Address Decode & Arbitration"]
+
+            LSU0 -->|"read/write requests"| Interconnect
+            LSU1 -->|"read/write requests"| Interconnect
+
+            subgraph MatrixPath ["Matrix Acceleration Path"]
+                direction LR
+                MMIO["Matrix Controller<br/>(matrix_controller.sv)<br/>MMIO Register File"]
+                MU["Matrix Unit<br/>(matrix_unit.sv)<br/>Systolic Array"]
+                MMIO -->|"start, dims, addrs"| MU
+            end
+
+            SharedMem["Shared Memory<br/>(shared_memory.sv)<br/>Dual-Port · 4 KB"]
+            ClusterSync["Cluster Sync<br/>(cluster_sync.sv)"]
+
+            Interconnect -->|"MMIO range<br/>0x8001_xxxx"| MMIO
+            Interconnect <-->|"Shared mem range<br/>0x8000_xxxx<br/>Port A"| SharedMem
+            MU <-->|"Port B"| SharedMem
+
+            Dispatcher -->|"start / block_id"| Core0
+            Dispatcher -->|"start / block_id"| Core1
+            Core0 --- ClusterSync
+            Core1 --- ClusterSync
+        end
+
+        DataMemCtrl["Data Memory Controller<br/>(mem_controller.sv)<br/>Multi-Channel Arbiter"]
+        ProgMemCtrl["Program Memory Controller<br/>(mem_controller.sv)<br/>Read-Only Arbiter"]
+
+        Interconnect -->|"Global range<br/>&lt; 0x8000_0000"| DataMemCtrl
+        Fetch0 -->|"instruction fetch"| ProgMemCtrl
+        Fetch1 -->|"instruction fetch"| ProgMemCtrl
+    end
+
+    DataMem[("Data Memory<br/>(External)")]
+    InstrMem[("Instruction Memory<br/>(External)")]
+
+    DataMemCtrl <--> DataMem
+    ProgMemCtrl <--> InstrMem
+```
 
 Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cores for computation. The **Virgo** architecture disaggregates this by introducing a dedicated **Matrix Unit** (a systolic array) at the cluster level.
 
