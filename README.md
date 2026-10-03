@@ -168,14 +168,172 @@ The Virgo Cluster (`virgo_cluster.sv`) is the top-level Streaming Multiprocessor
 5.  **Matrix Unit** (`matrix_unit.sv`): A systolic-array GEMM engine (configurable up to 8×8 tiles). It reads matrices A and B from shared memory via Port B, performs multiply-accumulate, and writes the result matrix C back.
 6.  **Cluster Sync** (`cluster_sync.sv`): Aggregates `core_done` signals from all sub-cores and tracks the Matrix Unit's busy/done status, providing cluster-wide synchronization primitives.
 
-### SIMT Cores
-*   **Threads and Warps:** Threads are grouped into warps. All threads in a warp execute the same instruction in lockstep but on different data (using vector registers).
-*   **Branching:** Handled via execution masking.
-*   **Load-Store Unit (LSU):** Handles memory reads and writes, interacting with the cluster interconnect for shared/MMIO memory and the memory controller for global memory.
+### Compute Core (SIMT Core)
+
+```mermaid
+flowchart TB
+    subgraph External ["External Interfaces"]
+        direction LR
+        Dispatcher["Dispatcher\n(start, reset, block_id,\nkernel_config)"]
+        InstrMem["Program Memory Controller\n(instruction fetch)"]
+        Interconnect["Cluster Interconnect\n(data read/write)"]
+    end
+
+    subgraph ComputeCore ["Compute Core (compute_core.sv)"]
+        direction TB
+
+        WarpSched["Warp Scheduler\nRound-robin selection\n(skip IDLE / FETCH / DONE)"]
+
+        subgraph PerWarp ["Per-Warp Circuitry (× WARPS_PER_CORE)"]
+            direction LR
+            Fetcher["Fetcher\n(fetcher.sv)\nIDLE → REQUESTING →\nWAITING → DONE"]
+            Decoder["Decoder\n(decoder.sv)\nSingle-cycle decode"]
+            ScalarRF["Scalar Reg File\n(scalar_reg_file.sv)\nexec mask, scalar rs1/rs2"]
+            VectorRF["Vector Reg File\n(reg_file.sv)\n32 regs × THREADS\nrs1/rs2 per thread"]
+        end
+
+        subgraph SharedHW ["Shared Hardware (× THREADS_PER_WARP)"]
+            direction LR
+            ALUs["ALU Array\n(alu.sv × THREADS)\n+ 1 Scalar ALU"]
+            LSUs["LSU Array\n(lsu.sv × THREADS)\n+ 1 Scalar LSU"]
+        end
+
+        subgraph WarpFSM ["Warp State Machine"]
+            direction LR
+            IDLE(["IDLE"])
+            FETCH(["FETCH"])
+            DECODE(["DECODE"])
+            REQUEST(["REQUEST"])
+            WAIT(["WAIT"])
+            EXECUTE(["EXECUTE"])
+            UPDATE(["UPDATE"])
+            DONE(["DONE"])
+            IDLE -->|"start"| FETCH
+            FETCH -->|"fetcher done"| DECODE
+            DECODE --> REQUEST
+            REQUEST --> WAIT
+            WAIT -->|"all LSUs ready"| EXECUTE
+            EXECUTE --> UPDATE
+            UPDATE -->|"halt"| DONE
+            UPDATE -->|"next instr"| FETCH
+        end
+    end
+
+    Dispatcher -->|"start / block_id\nkernel_config"| WarpSched
+    WarpSched -->|"current_warp"| PerWarp
+    Fetcher -->|"instruction"| Decoder
+    Decoder -->|"decoded fields"| ScalarRF
+    Decoder -->|"decoded fields"| VectorRF
+    ScalarRF -->|"scalar rs1/rs2"| ALUs
+    VectorRF -->|"vector rs1/rs2"| ALUs
+    VectorRF -->|"vector rs1/rs2"| LSUs
+    ScalarRF -->|"scalar rs1/rs2"| LSUs
+    ALUs -->|"alu_out"| VectorRF
+    ALUs -->|"scalar_alu_out"| ScalarRF
+    LSUs -->|"lsu_out"| VectorRF
+    LSUs -->|"scalar_lsu_out"| ScalarRF
+
+    Fetcher <-->|"instruction fetch\n(per-warp channel)"| InstrMem
+    LSUs <-->|"data read/write\n(THREADS+1 channels)"| Interconnect
+```
+
+The Compute Core (`compute_core.sv`) is the SIMT execution engine. Each core contains:
+
+*   **Warp Scheduler:** Round-robin selects the next warp that is ready to execute (skipping warps in `IDLE`, `FETCH`, or `DONE` states). The selected warp drives the shared ALU and LSU arrays.
+*   **Per-Warp Circuitry** (replicated `WARPS_PER_CORE` times): A **Fetcher** that asynchronously requests instructions from program memory, a **Decoder** that produces control signals in one cycle, a **Scalar Register File** (holding execution masks and scalar operands), and a **Vector Register File** (32 registers × `THREADS_PER_WARP`, providing per-thread `rs1`/`rs2`).
+*   **Shared Hardware** (replicated `THREADS_PER_WARP` times): An **ALU** and **LSU** per thread, plus one scalar ALU and one scalar LSU. These are time-multiplexed across warps by the scheduler.
+*   **Warp State FSM:** Each warp independently cycles through `FETCH → DECODE → REQUEST → WAIT → EXECUTE → UPDATE`, then either loops back to `FETCH` or transitions to `DONE` on a halt instruction. Execution masking handles divergent branches.
+*   **Latency Hiding:** Although only one warp occupies the ALU/LSU hardware per cycle, all warps progress concurrently — fetchers run in parallel, so while one warp executes, others can be fetching or waiting on memory. The scheduler switches to a ready warp whenever the current one finishes its `UPDATE` stage.
+
+#### Default Hardware Resource Summary
+
+The table below shows the concrete resource counts using the default parameters from `gpu.sv`:
+
+| Level | Resource | Count | Notes |
+| :--- | :--- | :--- | :--- |
+| **GPU** | Clusters | **1** | `NUM_CLUSTERS = 1` |
+| | Data Memory Channels | 8 | `DATA_MEM_NUM_CHANNELS = 8` |
+| | Instruction Memory Channels | 8 | `INSTRUCTION_MEM_NUM_CHANNELS = 8` |
+| **Per Cluster** | Compute Cores | **2** | `CORES_PER_CLUSTER = 2` |
+| | Matrix Unit | 1 | Systolic array, up to 8×8 tiles |
+| | Shared Memory | 1 | 1024 words = 4 KB |
+| | Cluster Interconnect | 1 | Address decode + arbitration |
+| **Per Core** | Warps | **2** | `WARPS_PER_CORE = 2` |
+| | Threads per Warp | **32** | `THREADS_PER_WARP = 32` |
+| | ALUs (shared) | **33** | 32 per-thread + 1 scalar, time-multiplexed across warps |
+| | LSUs (shared) | **33** | 32 per-thread + 1 scalar, time-multiplexed across warps |
+| | Vector Register Files | **2** | 1 per warp (32 regs × 32 threads each) |
+| | Scalar Register Files | **2** | 1 per warp (exec mask + scalar operands) |
+| | Fetchers | **2** | 1 per warp (fetch in parallel) |
+| | Decoders | **2** | 1 per warp |
+| **GPU Totals** | Cores | 2 | 1 cluster × 2 cores |
+| | Warps | 4 | 2 cores × 2 warps |
+| | Threads | 128 | 4 warps × 32 threads |
+| | ALUs | 66 | 2 cores × 33 ALUs |
+| | LSUs | 66 | 2 cores × 33 LSUs |
 
 ### Matrix Unit
 
-![Matrix Unit Schematic](docs/images/multiply_unit.drawio.png)
+```mermaid
+flowchart TB
+    subgraph Control ["Control Interface (from Matrix Controller)"]
+        direction LR
+        CtrlIn["start · accumulate · clear_acc\ndim_m · dim_n · dim_k\naddr_a · addr_b · addr_c"]
+    end
+
+    subgraph MatrixUnit ["Matrix Unit (matrix_unit.sv)"]
+        direction TB
+
+        Latch["Latch Control Registers\nreg_m, reg_n, reg_k\nreg_addr_a/b/c\nreg_accumulate"]
+
+        subgraph Accumulator ["Internal Accumulator"]
+            ACC["acc[MAX_DIM][MAX_DIM]\nSigned MAC Array\n(clear on start or clear_acc)"]
+        end
+
+        subgraph FSM ["State Machine"]
+            direction LR
+            IDLE(["ST_IDLE"])
+            READ_A(["ST_READ_A"])
+            WAIT_A(["ST_WAIT_A"])
+            READ_B(["ST_READ_B"])
+            WAIT_B(["ST_WAIT_B\nacc += A × B"])
+            WRITE_C(["ST_WRITE_C"])
+            WAIT_C(["ST_WAIT_C"])
+            DONE_ST(["ST_DONE"])
+
+            IDLE -->|"start"| READ_A
+            READ_A -->|"assert read_valid\naddr = addr_a + offset"| WAIT_A
+            WAIT_A -->|"mem_read_ready\nlatch elem_a"| READ_B
+            READ_B -->|"assert read_valid\naddr = addr_b + offset"| WAIT_B
+            WAIT_B -->|"mem_read_ready\nMAC: acc[i][j] += elem_a × elem_b"| READ_A
+            WAIT_B -->|"k,j,i loops done"| WRITE_C
+            WRITE_C -->|"assert write_valid\ndata = acc[i][j]"| WAIT_C
+            WAIT_C -->|"mem_write_ready\nadvance i,j"| WRITE_C
+            WAIT_C -->|"all elements written"| DONE_ST
+            DONE_ST -->|"busy←0, done←1"| IDLE
+        end
+
+        LoopCtrl["Triple-Nested Loop Control\nfor i in [0,M)\n  for j in [0,N)\n    for k in [0,K)"]
+        Profiler["Cycle Counter\n(cycle_count)"]
+    end
+
+    subgraph MemPort ["Shared Memory (Port B)"]
+        SM["mem_read_valid / ready / data\nmem_write_valid / ready / data"]
+    end
+
+    subgraph StatusOut ["Status (to Matrix Controller)"]
+        Status["busy · done · cycle_count"]
+    end
+
+    CtrlIn --> Latch
+    Latch --> FSM
+    LoopCtrl --> FSM
+    FSM --> ACC
+    FSM <-->|"read A, read B,\nwrite C"| SM
+    FSM --> Profiler
+    Profiler --> Status
+    FSM --> Status
+```
 
 The Matrix Unit (`matrix_unit.sv`) is a systolic-array-based compute engine dedicated to General Matrix Multiply-Accumulate (GEMM). It reads tile data (matrices A and B) from shared memory via Port B, performs the multiply-accumulate through a configurable M×N×K pipeline, and writes the result (matrix C) back. An internal accumulator can be preserved across invocations (`accumulate` mode) or cleared (`clear_acc`), enabling tiled outer-product loops. A cycle counter tracks operation latency.
 
