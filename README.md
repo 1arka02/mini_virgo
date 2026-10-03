@@ -1,14 +1,26 @@
-# mini-Virgo(Virgo Architecture)
+# mini-Virgo (Virgo Architecture)
 
-An educational, system-verilog implementation of a parallel processor, modified to include the **Virgo micro-architecture** (a dedicated cluster-level matrix unit).
+An educational, SystemVerilog implementation of a parallel processor, modified to include the **Virgo micro-architecture** (a dedicated cluster-level matrix unit).
 
 ---
 
-## Overview and GPU Architecture
+## Overview
 
 `mini-Virgo` is a SystemVerilog RTL model of a simple RISC-V-like GPU. It explores modern GPU design concepts, specifically focusing on the integration of systolic arrays for matrix operations (GEMM).
 
-### The Virgo Architecture
+Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cores for computation. The **Virgo** architecture disaggregates this by introducing a dedicated **Matrix Unit** (a systolic array) at the cluster level.
+
+*   **Cluster (SM) Level:** The GPU is divided into clusters. Each cluster contains multiple SIMD cores (`CORES_PER_CLUSTER`).
+*   **Dedicated Matrix Unit:** A systolic array (`matrix_unit.sv`) is instantiated inside each cluster. It is designed specifically for matrix multiplication and accumulation (GEMM) workloads, offering better FLOPS scalability and energy efficiency.
+*   **Shared Memory:** Each cluster features a local shared memory. This memory acts as a high-speed buffer accessible by both the SIMT cores and the matrix unit.
+*   **Interconnect & Arbitration:** A cluster interconnect (`cluster_interconnect.sv`) arbitrates access to the shared memory and MMIO registers between the cores and the matrix unit.
+*   **MMIO Control:** The SIMT cores control the matrix unit via Memory-Mapped I/O (MMIO) registers (e.g., `VIRGO_REG_CTRL`, `VIRGO_REG_ADDR_A`, `VIRGO_REG_DIM_M`). Threads configure the dimensions and memory addresses, and then write a start bit to trigger the GEMM operation.
+
+---
+
+## Architecture
+
+### Top-Level GPU
 
 ```mermaid
 flowchart TB
@@ -90,13 +102,61 @@ flowchart TB
     ProgMemCtrl <--> InstrMem
 ```
 
-Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cores for computation. The **Virgo** architecture disaggregates this by introducing a dedicated **Matrix Unit** (a systolic array) at the cluster level.
+---
 
-*   **Cluster (SM) Level:** The GPU is divided into clusters. Each cluster contains multiple SIMD cores (`CORES_PER_CLUSTER`).
-*   **Dedicated Matrix Unit:** A systolic array (`matrix_unit.sv`) is instantiated inside each cluster. It is designed specifically for matrix multiplication and accumulation (GEMM) workloads, offering better FLOPS scalability and energy efficiency.
-*   **Shared Memory:** Each cluster features a local shared memory. This memory acts as a high-speed buffer accessible by both the SIMT cores and the matrix unit.
-*   **Interconnect & Arbitration:** A cluster interconnect (`cluster_interconnect.sv`) arbitrates access to the shared memory and MMIO registers between the cores and the matrix unit.
-*   **MMIO Control:** The SIMT cores control the matrix unit via Memory-Mapped I/O (MMIO) registers (e.g., `VIRGO_REG_CTRL`, `VIRGO_REG_ADDR_A`, `VIRGO_REG_DIM_M`). Threads configure the dimensions and memory addresses, and then write a start bit to trigger the GEMM operation.
+### Dispatcher
+
+```mermaid
+flowchart TB
+    subgraph Inputs ["Host Interface"]
+        direction LR
+        Host["start · kernel_config\n(num_blocks, num_warps_per_block,\nbase_instructions_address)"]
+    end
+
+    subgraph Disp ["Dispatcher (dispatcher.sv)"]
+        direction TB
+
+        subgraph State ["Internal State"]
+            direction LR
+            BD["blocks_dispatched"]
+            BDone["blocks_done"]
+            TotalBlocks["total_blocks\n= kernel_config.num_blocks"]
+        end
+
+        subgraph FSM ["Dispatch Logic (per cycle)"]
+            direction TB
+            CheckReset{"Core just\nreset?"}
+            HasWork{"blocks_dispatched\n< total_blocks?"}
+            Assign["Assign block_id\nassert core_start"]
+            CheckDone{"core_done[i]\nasserted?"}
+            ResetCore["Reset core\nblocks_done++"]
+            KernelDone{"blocks_done\n== total_blocks?"}
+            Done["done ← 1"]
+
+            CheckReset -->|"Yes"| HasWork
+            HasWork -->|"Yes"| Assign
+            HasWork -->|"No"| CheckDone
+            CheckReset -->|"No"| CheckDone
+            CheckDone -->|"Yes"| ResetCore
+            ResetCore --> KernelDone
+            KernelDone -->|"Yes"| Done
+        end
+    end
+
+    subgraph Cores ["Compute Cores (NUM_CORES)"]
+        direction LR
+        CoreCtrl["core_start · core_reset\ncore_block_id · core_done"]
+    end
+
+    Host --> State
+    State --> FSM
+    FSM --> CoreCtrl
+    CoreCtrl -->|"core_done feedback"| FSM
+```
+
+The Dispatcher (`dispatcher.sv`) is the GPU-level work scheduler that maps thread blocks from a kernel launch onto available hardware cores. On `start`, it resets all cores and begins dispatching — assigning a unique `block_id` to each free core and asserting `core_start`. When a core signals `core_done`, the dispatcher resets it and dispatches the next pending block (if any remain). Once `blocks_done == total_blocks`, the kernel is complete. Think of it as a work queue: if the kernel requires 10 blocks but only 2 cores exist, the dispatcher feeds blocks to cores as they become free, 2 at a time, until all 10 are done.
+
+---
 
 ### Virgo Cluster
 
@@ -167,6 +227,8 @@ The Virgo Cluster (`virgo_cluster.sv`) is the top-level Streaming Multiprocessor
 4.  **Matrix Controller** (`matrix_controller.sv`): An MMIO slave that exposes configuration registers (tile dimensions, base addresses, control/status) to the cores. It also implements a hardware barrier (`REG_SYNC`) that stalls a reading thread until the Matrix Unit finishes.
 5.  **Matrix Unit** (`matrix_unit.sv`): A systolic-array GEMM engine (configurable up to 8×8 tiles). It reads matrices A and B from shared memory via Port B, performs multiply-accumulate, and writes the result matrix C back.
 6.  **Cluster Sync** (`cluster_sync.sv`): Aggregates `core_done` signals from all sub-cores and tracks the Matrix Unit's busy/done status, providing cluster-wide synchronization primitives.
+
+---
 
 ### Compute Core (SIMT Core)
 
@@ -245,32 +307,34 @@ The Compute Core (`compute_core.sv`) is the SIMT execution engine. Each core con
 *   **Warp State FSM:** Each warp independently cycles through `FETCH → DECODE → REQUEST → WAIT → EXECUTE → UPDATE`, then either loops back to `FETCH` or transitions to `DONE` on a halt instruction. Execution masking handles divergent branches.
 *   **Latency Hiding:** Although only one warp occupies the ALU/LSU hardware per cycle, all warps progress concurrently — fetchers run in parallel, so while one warp executes, others can be fetching or waiting on memory. The scheduler switches to a ready warp whenever the current one finishes its `UPDATE` stage.
 
-#### Default Hardware Resource Summary
+---
 
-The table below shows the concrete resource counts using the default parameters from `gpu.sv`:
+### Fetcher
 
-| Level | Resource | Count | Notes |
-| :--- | :--- | :--- | :--- |
-| **GPU** | Clusters | **1** | `NUM_CLUSTERS = 1` |
-| | Data Memory Channels | 8 | `DATA_MEM_NUM_CHANNELS = 8` |
-| | Instruction Memory Channels | 8 | `INSTRUCTION_MEM_NUM_CHANNELS = 8` |
-| **Per Cluster** | Compute Cores | **2** | `CORES_PER_CLUSTER = 2` |
-| | Matrix Unit | 1 | Systolic array, up to 8×8 tiles |
-| | Shared Memory | 1 | 1024 words = 4 KB |
-| | Cluster Interconnect | 1 | Address decode + arbitration |
-| **Per Core** | Warps | **2** | `WARPS_PER_CORE = 2` |
-| | Threads per Warp | **32** | `THREADS_PER_WARP = 32` |
-| | ALUs (shared) | **33** | 32 per-thread + 1 scalar, time-multiplexed across warps |
-| | LSUs (shared) | **33** | 32 per-thread + 1 scalar, time-multiplexed across warps |
-| | Vector Register Files | **2** | 1 per warp (32 regs × 32 threads each) |
-| | Scalar Register Files | **2** | 1 per warp (exec mask + scalar operands) |
-| | Fetchers | **2** | 1 per warp (fetch in parallel) |
-| | Decoders | **2** | 1 per warp |
-| **GPU Totals** | Cores | 2 | 1 cluster × 2 cores |
-| | Warps | 4 | 2 cores × 2 warps |
-| | Threads | 128 | 4 warps × 32 threads |
-| | ALUs | 66 | 2 cores × 33 ALUs |
-| | LSUs | 66 | 2 cores × 33 LSUs |
+```mermaid
+flowchart LR
+    subgraph Fetcher ["Fetcher (fetcher.sv)"]
+        direction LR
+        IDLE(["FETCHER_IDLE"])
+        FETCHING(["FETCHER_FETCHING"])
+        DONE_F(["FETCHER_DONE"])
+
+        IDLE -->|"warp_state == WARP_FETCH\nassert mem_read_valid\naddress ← PC"| FETCHING
+        FETCHING -->|"mem_read_ready\nlatch instruction"| DONE_F
+        DONE_F -->|"warp_state == WARP_DECODE"| IDLE
+    end
+
+    ProgMem["Program Memory\n(via mem_controller)"]
+    WarpCtrl["Warp State\n(from compute_core)"]
+
+    WarpCtrl -->|"warp_state, PC"| IDLE
+    FETCHING <-->|"read_valid / ready\nread_address / data"| ProgMem
+    DONE_F -->|"fetched instruction"| WarpCtrl
+```
+
+The Fetcher (`fetcher.sv`) is a lightweight 3-state FSM that retrieves a single instruction from program memory for its warp. In `IDLE`, it waits until the warp enters `WARP_FETCH`, then asserts `mem_read_valid` with the current PC. In `FETCHING`, it waits for the program memory controller to respond with `mem_read_ready` and latches the instruction data. In `DONE`, it holds the instruction until the warp advances to `WARP_DECODE`, then returns to idle. Each warp has its own dedicated fetcher instance, enabling multiple warps to fetch instructions in parallel — this is the foundation of the core's latency-hiding mechanism.
+
+---
 
 ### Matrix Unit
 
@@ -337,6 +401,8 @@ flowchart TB
 
 The Matrix Unit (`matrix_unit.sv`) is a systolic-array-based compute engine dedicated to General Matrix Multiply-Accumulate (GEMM). It reads tile data (matrices A and B) from shared memory via Port B, performs the multiply-accumulate through a configurable M×N×K pipeline, and writes the result (matrix C) back. An internal accumulator can be preserved across invocations (`accumulate` mode) or cleared (`clear_acc`), enabling tiled outer-product loops. A cycle counter tracks operation latency.
 
+---
+
 ### Matrix Controller
 
 ```mermaid
@@ -396,6 +462,8 @@ flowchart TB
 ```
 
 The Matrix Controller (`matrix_controller.sv`) is an MMIO slave that exposes the matrix unit's configuration as a set of memory-mapped registers in the `0x8001_0000` address range. SIMT cores write tile dimensions (`DIM_M/N/K`), shared-memory base addresses (`ADDR_A/B/C`), and control bits (`START`, `ACCUMULATE`, `CLEAR_ACC`) through ordinary store instructions. Reads to `REG_STATUS` return the busy/done state. A special `REG_SYNC` register acts as a hardware barrier — the controller holds `read_ready` low while the matrix unit is busy, effectively stalling the requesting thread until the GEMM operation completes.
+
+---
 
 ### Cluster Interconnect
 
@@ -468,6 +536,8 @@ Each resource has a **fixed-priority arbiter** — a 3-state FSM (`IDLE → SERV
 
 The **response demux** routes `ready` and `data` signals back to the specific LSU that won arbitration. Only the winning LSU's `core_read_ready` / `core_write_ready` is asserted; all others see `0` (stalled) until the current transaction completes.
 
+---
+
 ### Shared Memory
 
 ```mermaid
@@ -488,6 +558,8 @@ flowchart TB
 ```
 
 The Shared Memory (`shared_memory.sv`) provides a high-throughput, low-latency dual-ported scratchpad memory local to each cluster. Port A is mapped to the cluster interconnect and serves read and write requests from the SIMT cores. Port B provides a dedicated read-only path directly to the Matrix Unit, ensuring that matrix data tiles can be streamed into the systolic array without interfering with core memory operations or arbitration bottlenecks.
+
+---
 
 ### Memory Controller
 
@@ -524,6 +596,35 @@ flowchart TB
 ```
 
 The Memory Controller (`mem_controller.sv`) manages concurrent accesses to global memory (both instruction and data memory) from numerous consumers (Fetchers or LSUs). It instantiates multiple memory channels (`NUM_CHANNELS`) and tracks their state using independent FSMs. When a channel is idle, it scans the consumers to find a pending read or write request, locks onto it, and dispatches it to the external memory interface. Once the memory responds, the channel relays the data or acknowledgment back to the specific consumer and waits for a consumer acknowledgment before returning to the idle state.
+
+---
+
+## Default Hardware Resource Summary
+
+The table below shows the concrete resource counts using the default parameters from `gpu.sv`. All parameters are configurable at synthesis time.
+
+| Level | Resource | Count | Notes |
+| :--- | :--- | :--- | :--- |
+| **GPU** | Clusters | **1** | `NUM_CLUSTERS = 1` |
+| | Data Memory Channels | 8 | `DATA_MEM_NUM_CHANNELS = 8` |
+| | Instruction Memory Channels | 8 | `INSTRUCTION_MEM_NUM_CHANNELS = 8` |
+| **Per Cluster** | Compute Cores | **2** | `CORES_PER_CLUSTER = 2` |
+| | Matrix Unit | 1 | Systolic array, up to 8×8 tiles |
+| | Shared Memory | 1 | 1024 words = 4 KB |
+| | Cluster Interconnect | 1 | Address decode + arbitration |
+| **Per Core** | Warps | **2** | `WARPS_PER_CORE = 2` |
+| | Threads per Warp | **32** | `THREADS_PER_WARP = 32` |
+| | ALUs (shared) | **33** | 32 per-thread + 1 scalar, time-multiplexed across warps |
+| | LSUs (shared) | **33** | 32 per-thread + 1 scalar, time-multiplexed across warps |
+| | Vector Register Files | **2** | 1 per warp (32 regs × 32 threads each) |
+| | Scalar Register Files | **2** | 1 per warp (exec mask + scalar operands) |
+| | Fetchers | **2** | 1 per warp (fetch in parallel) |
+| | Decoders | **2** | 1 per warp |
+| **GPU Totals** | Cores | 2 | 1 cluster × 2 cores |
+| | Warps | 4 | 2 cores × 2 warps |
+| | Threads | 128 | 4 warps × 32 threads |
+| | ALUs | 66 | 2 cores × 33 ALUs |
+| | LSUs | 66 | 2 cores × 33 LSUs |
 
 ---
 
