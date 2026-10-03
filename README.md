@@ -98,6 +98,76 @@ Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cor
 *   **Interconnect & Arbitration:** A cluster interconnect (`cluster_interconnect.sv`) arbitrates access to the shared memory and MMIO registers between the cores and the matrix unit.
 *   **MMIO Control:** The SIMT cores control the matrix unit via Memory-Mapped I/O (MMIO) registers (e.g., `VIRGO_REG_CTRL`, `VIRGO_REG_ADDR_A`, `VIRGO_REG_DIM_M`). Threads configure the dimensions and memory addresses, and then write a start bit to trigger the GEMM operation.
 
+### Virgo Cluster
+
+```mermaid
+flowchart TB
+    subgraph External ["External Interfaces"]
+        direction LR
+        Dispatcher["Dispatcher\n(core_start, core_reset,\ncore_block_id, kernel_config)"]
+        ProgMemCtrl["Program Memory Controller\n(instruction fetch channels)"]
+        DataMemCtrl["Data Memory Controller\n(global read/write channels)"]
+    end
+
+    subgraph VirgoCluster ["Virgo Cluster (virgo_cluster.sv)"]
+        direction TB
+
+        subgraph Cores ["1. SIMT Sub-Cores (× CORES_PER_CLUSTER)"]
+            direction LR
+            Core0["Compute Core 0\n(compute_core.sv)\nWarps · Fetcher · Decoder\nALU · Reg Files · LSUs"]
+            Core1["Compute Core 1\n(compute_core.sv)"]
+        end
+
+        Interconnect["2. Cluster Interconnect\n(cluster_interconnect.sv)\nAddress Decode · SM Arbiter · MMIO Arbiter\nResponse Demux"]
+
+        SharedMem["3. Shared Memory\n(shared_memory.sv)\nDual-Port SRAM\n(MEM_WORDS × DATA_WIDTH)"]
+
+        MatrixCtrl["4. Matrix Controller\n(matrix_controller.sv)\nMMIO Register File\nSync Barrier"]
+
+        MatrixUnit["5. Matrix Unit\n(matrix_unit.sv)\nSystolic Array\n(MAX_DIM=8)"]
+
+        ClusterSync["6. Cluster Sync\n(cluster_sync.sv)\ncore_done aggregation\nmatrix_ready status"]
+    end
+
+    %% Dispatcher → Cores
+    Dispatcher -->|"start / reset\nblock_id / kernel_config"| Core0
+    Dispatcher -->|"start / reset\nblock_id / kernel_config"| Core1
+
+    %% Cores → Program Memory Controller (instruction fetches)
+    Core0 -->|"instruction fetch\n(WARPS_PER_CORE channels)"| ProgMemCtrl
+    Core1 -->|"instruction fetch"| ProgMemCtrl
+
+    %% Cores → Interconnect (LSU requests)
+    Core0 -->|"LSU read/write\n(THREADS+1 per core)"| Interconnect
+    Core1 -->|"LSU read/write"| Interconnect
+
+    %% Interconnect routing
+    Interconnect -->|"addr < 0x8000_0000\nGlobal (pass-through)"| DataMemCtrl
+    Interconnect <-->|"0x8000_xxxx\nPort A"| SharedMem
+    Interconnect <-->|"0x8001_xxxx\nMMIO"| MatrixCtrl
+
+    %% Matrix Controller ↔ Matrix Unit
+    MatrixCtrl -->|"start, accumulate,\nclear_acc, dims, addrs"| MatrixUnit
+    MatrixUnit -->|"busy, done,\ncycle_count"| MatrixCtrl
+
+    %% Matrix Unit ↔ Shared Memory Port B
+    MatrixUnit <-->|"Port B\n(dedicated read/write)"| SharedMem
+
+    %% Cluster Sync
+    Core0 --- ClusterSync
+    Core1 --- ClusterSync
+    MatrixUnit -->|"busy / done"| ClusterSync
+```
+
+The Virgo Cluster (`virgo_cluster.sv`) is the top-level Streaming Multiprocessor (SM) equivalent in the Virgo architecture. Each cluster integrates six sub-blocks:
+
+1.  **SIMT Sub-Cores** (`compute_core.sv` × `CORES_PER_CLUSTER`): Each core contains warp schedulers, instruction fetchers, decoders, ALUs, vector/scalar register files, and per-thread + scalar LSUs. Instruction fetch channels connect directly out to the Program Memory Controller; LSU traffic is routed through the cluster interconnect.
+2.  **Cluster Interconnect** (`cluster_interconnect.sv`): Receives all LSU requests from every core and performs address-based routing — global memory requests (`< 0x8000_0000`) pass through to the external Data Memory Controller, shared memory accesses are arbitrated onto Port A, and MMIO accesses are arbitrated to the Matrix Controller.
+3.  **Shared Memory** (`shared_memory.sv`): A dual-ported SRAM scratchpad. Port A serves the SIMT cores (via the interconnect arbiter); Port B provides a dedicated, contention-free path for the Matrix Unit to stream tile data.
+4.  **Matrix Controller** (`matrix_controller.sv`): An MMIO slave that exposes configuration registers (tile dimensions, base addresses, control/status) to the cores. It also implements a hardware barrier (`REG_SYNC`) that stalls a reading thread until the Matrix Unit finishes.
+5.  **Matrix Unit** (`matrix_unit.sv`): A systolic-array GEMM engine (configurable up to 8×8 tiles). It reads matrices A and B from shared memory via Port B, performs multiply-accumulate, and writes the result matrix C back.
+6.  **Cluster Sync** (`cluster_sync.sv`): Aggregates `core_done` signals from all sub-cores and tracks the Matrix Unit's busy/done status, providing cluster-wide synchronization primitives.
+
 ### SIMT Cores
 *   **Threads and Warps:** Threads are grouped into warps. All threads in a warp execute the same instruction in lockstep but on different data (using vector registers).
 *   **Branching:** Handled via execution masking.
