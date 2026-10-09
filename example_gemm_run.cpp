@@ -29,24 +29,25 @@ int main() {
     auto data_mem = sim::make_data_memory<DATA_NUM_CHANNELS>(&top);
     auto instruction_mem = sim::make_instruction_memory<INST_NUM_CHANNELS>(&top);
 
-    // Initialize 4x4 Matrices A and B in Global Memory
-    std::vector<int> mat_a = {
-        1, 2, 3, 4,
-        2, 1, 0, 1,
-        0, 1, 2, 3,
-        3, 0, 1, 2
+    // Initialize 4x4 Matrices A and B in Global Memory (Packed INT8x4)
+    // These numbers come from what generate_data.py produced!
+    std::vector<unsigned int> mat_a = {
+        67305985, // Row 0 packed
+        16777474, // Row 1 packed
+        50462976, // Row 2 packed
+        33619971  // Row 3 packed
     };
 
-    std::vector<int> mat_b = {
-        2, 0, 1, 3,
-        1, 2, 0, 1,
-        3, 1, 2, 0,
-        0, 3, 1, 2
+    std::vector<unsigned int> mat_b = {
+        196866,   // Col 0 packed
+        50397696, // Col 1 packed
+        16908289, // Col 2 packed
+        33554691  // Col 3 packed
     };
 
-    for (int i = 0; i < 16; i++) {
-        data_mem[i * 4] = mat_a[i];            // Matrix A at byte offset 0
-        data_mem[(16 + i) * 4] = mat_b[i];     // Matrix B at byte offset 64
+    for (int i = 0; i < 4; i++) {
+        data_mem[i * 4] = mat_a[i];            // Matrix A at byte offset 0 (only takes 4 words now!)
+        data_mem[(16 + i) * 4] = mat_b[i];     // Matrix B at byte offset 64 (only takes 4 words now!)
     }
 
     std::cout << "Initial state in Global Memory:\n";
@@ -73,6 +74,10 @@ int main() {
     instruction_mem.push_instruction(sw(6_x, 11_x, 8));      // DIM_M = 4
     instruction_mem.push_instruction(sw(6_x, 11_x, 12));     // DIM_N = 4
     instruction_mem.push_instruction(sw(6_x, 11_x, 16));     // DIM_K = 4
+
+    // SET PRECISION TO INT8x4 (Mode 1)
+    instruction_mem.push_instruction(addi(15_x, 0_x, 1));
+    instruction_mem.push_instruction(sw(6_x, 15_x, 40));     // REG_PRECISION = 1
 
     instruction_mem.push_instruction(sw(6_x, 5_x, 20));      // ADDR_A = Shared Mem + 0
     instruction_mem.push_instruction(addi(12_x, 5_x, 64));

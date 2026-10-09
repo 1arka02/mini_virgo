@@ -34,6 +34,7 @@ module matrix_controller #(
     output logic [ADDR_WIDTH-1:0]  mu_addr_a,
     output logic [ADDR_WIDTH-1:0]  mu_addr_b,
     output logic [ADDR_WIDTH-1:0]  mu_addr_c,
+    output logic [1:0]             mu_precision,
 
     input wire                     mu_busy,
     input wire                     mu_done,
@@ -49,6 +50,7 @@ module matrix_controller #(
     logic [ADDR_WIDTH-1:0] reg_addr_c;
     logic                  reg_accumulate;
     logic                  reg_done_sticky;
+    logic [1:0]            reg_precision;
 
     assign mu_dim_m      = reg_dim_m;
     assign mu_dim_n      = reg_dim_n;
@@ -57,6 +59,7 @@ module matrix_controller #(
     assign mu_addr_b     = reg_addr_b;
     assign mu_addr_c     = reg_addr_c;
     assign mu_accumulate = reg_accumulate;
+    assign mu_precision  = reg_precision;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -74,6 +77,7 @@ module matrix_controller #(
             reg_addr_b       <= `VIRGO_SHARED_MEM_BASE + 32'h0000_0040;
             reg_addr_c       <= `VIRGO_SHARED_MEM_BASE + 32'h0000_0080;
             reg_done_sticky  <= 1'b0;
+            reg_precision    <= 2'b00;
         end else begin
             // Single-cycle pulses auto-clear
             mu_start     <= 1'b0;
@@ -122,6 +126,9 @@ module matrix_controller #(
                         `VIRGO_REG_CYCLES: begin
                             mmio_read_data <= mu_cycle_count;
                         end
+                        `VIRGO_REG_PRECISION: begin
+                            mmio_read_data <= {30'b0, reg_precision};
+                        end
                         default: begin
                             mmio_read_data <= '0;
                         end
@@ -169,6 +176,9 @@ module matrix_controller #(
                     end
                     `VIRGO_REG_ADDR_C: begin
                         reg_addr_c <= mmio_write_data;
+                    end
+                    `VIRGO_REG_PRECISION: begin
+                        reg_precision <= mmio_write_data[1:0];
                     end
                     default: begin
                         // Ignore unknown write addresses

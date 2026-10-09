@@ -25,6 +25,7 @@ module matrix_unit #(
     input wire [ADDR_WIDTH-1:0]   addr_a,      // Shared memory offset for A
     input wire [ADDR_WIDTH-1:0]   addr_b,      // Shared memory offset for B
     input wire [ADDR_WIDTH-1:0]   addr_c,      // Shared memory offset for C
+    input wire [1:0]              precision,   // 0: INT32, 1: INT8x4, 2: FP8x4
 
     output logic                  busy,
     output logic                  done,
@@ -62,6 +63,7 @@ module matrix_unit #(
     logic [3:0] reg_m, reg_n, reg_k;
     logic [ADDR_WIDTH-1:0] reg_addr_a, reg_addr_b, reg_addr_c;
     logic reg_accumulate;
+    logic [1:0] reg_precision;
 
     localparam int DIM_BITS = $clog2(MAX_DIM);
 
@@ -71,6 +73,14 @@ module matrix_unit #(
     // Temporary element registers
     logic signed [DATA_WIDTH-1:0] elem_a;
     logic signed [DATA_WIDTH-1:0] elem_b;
+
+    // FP8 Datapath
+    logic signed [DATA_WIDTH-1:0] fp8_mac_out;
+    fp8_dp4 fp8_inst (
+        .a_packed(elem_a),
+        .b_packed(mem_read_data),
+        .result(fp8_mac_out)
+    );
 
     // Cycle profiling counter
     logic [DATA_WIDTH-1:0] cycles;
@@ -100,9 +110,10 @@ module matrix_unit #(
             reg_n           <= '0;
             reg_k           <= '0;
             reg_addr_a      <= '0;
-            reg_addr_b      <= '0;re
+            reg_addr_b      <= '0;
             reg_addr_c      <= '0;
             reg_accumulate  <= 1'b0;
+            reg_precision   <= '0;
 
             for (int r = 0; r < MAX_DIM; r++) begin
                 for (int c = 0; c < MAX_DIM; c++) begin
@@ -137,6 +148,7 @@ module matrix_unit #(
                         reg_addr_b     <= addr_b;
                         reg_addr_c     <= addr_c;
                         reg_accumulate <= accumulate;
+                        reg_precision  <= precision;
 
                         if (!accumulate && !clear_acc) begin
                             for (int r = 0; r < MAX_DIM; r++) begin
@@ -178,15 +190,35 @@ module matrix_unit #(
                         mem_read_valid <= 1'b0;
                         elem_b         <= mem_read_data;
 
-                        // Systolic MAC Accumulation: acc[i][j] += elem_a * mem_read_data
-                        acc[idx_i][idx_j] <= acc[idx_i][idx_j] + (elem_a * $signed(mem_read_data));
+                        // Systolic MAC Accumulation
+                        if (reg_precision == 2'b01) begin
+                            // INT8x4 (DP4A)
+                            logic signed [7:0] a0, a1, a2, a3;
+                            logic signed [7:0] b0, b1, b2, b3;
+                            
+                            {a3, a2, a1, a0} = elem_a;
+                            {b3, b2, b1, b0} = mem_read_data;
+
+                            acc[idx_i][idx_j] <= acc[idx_i][idx_j] + 
+                                                 (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3);
+                        end else if (reg_precision == 2'b10) begin
+                            // FP8x4 (E4M3)
+                            acc[idx_i][idx_j] <= acc[idx_i][idx_j] + fp8_mac_out;
+                        end else begin
+                            // INT32 (Legacy)
+                            acc[idx_i][idx_j] <= acc[idx_i][idx_j] + (elem_a * $signed(mem_read_data));
+                        end
 
                         // Advance loop indices
-                        if (32'(idx_k) + 1 < 32'(reg_k)) begin
-                            idx_k <= idx_k + 1'b1;
-                            state <= ST_READ_A;
-                        end else begin
-                            idx_k <= '0;
+                        begin
+                            logic [31:0] k_step;
+                            k_step = (reg_precision == 2'b00) ? 1 : 4;
+
+                            if (32'(idx_k) + k_step < 32'(reg_k)) begin
+                                idx_k <= idx_k + k_step[DIM_BITS-1:0];
+                                state <= ST_READ_A;
+                            end else begin
+                                idx_k <= '0;
                             if (32'(idx_j) + 1 < 32'(reg_n)) begin
                                 idx_j <= idx_j + 1'b1;
                                 state <= ST_READ_A;
@@ -203,6 +235,7 @@ module matrix_unit #(
                                 end
                             end
                         end
+                        end // end of begin block for k_step
                     end
                 end
 

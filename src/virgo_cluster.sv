@@ -104,6 +104,7 @@ module virgo_cluster #(
     data_memory_address_t     mu_addr_a;
     data_memory_address_t     mu_addr_b;
     data_memory_address_t     mu_addr_c;
+    wire [1:0]                mu_precision;
 
     wire                      mu_busy;
     wire                      mu_done;
@@ -274,6 +275,7 @@ module virgo_cluster #(
         .mu_addr_a(mu_addr_a),
         .mu_addr_b(mu_addr_b),
         .mu_addr_c(mu_addr_c),
+        .mu_precision(mu_precision),
 
         .mu_busy(mu_busy),
         .mu_done(mu_done),
@@ -300,6 +302,7 @@ module virgo_cluster #(
         .addr_a(mu_addr_a),
         .addr_b(mu_addr_b),
         .addr_c(mu_addr_c),
+        .precision(mu_precision),
 
         .busy(mu_busy),
         .done(mu_done),

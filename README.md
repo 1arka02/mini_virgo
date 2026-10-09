@@ -24,79 +24,59 @@ Traditional GPUs rely entirely on SIMT (Single Instruction, Multiple Thread) cor
 
 ```mermaid
 flowchart TB
-    %% ── Top Level ──
-    Host["Host / Kernel Config"]
-    Host -->|"execution_start + kernel_config"| Dispatcher
+    classDef host fill:#4f46e5,stroke:#3730a3,color:#fff,font-weight:bold
+    classDef ctrl fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef core fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef mem fill:#e11d48,stroke:#be123c,color:#fff
+    classDef accel fill:#d97706,stroke:#b45309,color:#fff
+    classDef ext fill:#6b7280,stroke:#4b5563,color:#fff
 
-    subgraph GPU ["GPU (gpu.sv)"]
-        Dispatcher["Dispatcher<br/>(dispatcher.sv)"]
+    Host(["🖥 Host"]):::host
+    Host -->|"kernel launch"| Dispatcher
 
-        subgraph Cluster0 ["Virgo Cluster (virgo_cluster.sv)"]
+    subgraph GPU ["GPU  ·  gpu.sv"]
+        Dispatcher["Dispatcher"]:::ctrl
+
+        subgraph Cluster0 ["Virgo Cluster  ·  virgo_cluster.sv"]
             direction TB
 
-            subgraph Cores ["SIMT Sub-Cores"]
+            subgraph Cores [" SIMT Cores "]
                 direction LR
-                subgraph Core0 ["Compute Core 0 (compute_core.sv)"]
-                    direction TB
-                    Warps0["Warps<br/>(warp scheduler)"]
-                    Fetch0["Fetcher"]
-                    Dec0["Decoder"]
-                    ALU0["ALU"]
-                    RF0["Vector & Scalar<br/>Register Files"]
-                    LSU0["LSUs<br/>(per-thread + scalar)"]
-                    Warps0 --> Fetch0 --> Dec0 --> ALU0
-                    Dec0 --> RF0
-                    Dec0 --> LSU0
-                end
-                subgraph Core1 ["Compute Core 1"]
-                    direction TB
-                    Warps1["Warps"]
-                    Fetch1["Fetcher"]
-                    Dec1["Decoder"]
-                    ALU1["ALU"]
-                    RF1["Register Files"]
-                    LSU1["LSUs"]
-                    Warps1 --> Fetch1 --> Dec1 --> ALU1
-                    Dec1 --> RF1
-                    Dec1 --> LSU1
-                end
+                Core0["Core 0"]:::core
+                Core1["Core 1"]:::core
             end
 
-            Interconnect["Cluster Interconnect<br/>(cluster_interconnect.sv)<br/>Address Decode & Arbitration"]
+            Interconnect["Cluster Interconnect\naddr decode · arbitration"]:::ctrl
 
-            LSU0 -->|"read/write requests"| Interconnect
-            LSU1 -->|"read/write requests"| Interconnect
-
-            subgraph MatrixPath ["Matrix Acceleration Path"]
+            subgraph MatrixPath [" Matrix Acceleration "]
                 direction LR
-                MMIO["Matrix Controller<br/>(matrix_controller.sv)<br/>MMIO Register File"]
-                MU["Matrix Unit<br/>(matrix_unit.sv)<br/>Systolic Array"]
-                MMIO -->|"start, dims, addrs"| MU
+                MMIO["Matrix\nController"]:::accel
+                MU["Matrix Unit\nsystolic array"]:::accel
+                MMIO -->|"start · dims · addrs"| MU
             end
 
-            SharedMem["Shared Memory<br/>(shared_memory.sv)<br/>Dual-Port · 4 KB"]
-            ClusterSync["Cluster Sync<br/>(cluster_sync.sv)"]
+            SharedMem[("Shared Memory\n4 KB · dual-port")]:::mem
+            ClusterSync["Cluster Sync"]:::ctrl
 
-            Interconnect -->|"MMIO range<br/>0x8001_xxxx"| MMIO
-            Interconnect <-->|"Shared mem range<br/>0x8000_xxxx<br/>Port A"| SharedMem
+            Core0 & Core1 -->|"LSU requests"| Interconnect
+            Interconnect -->|"MMIO  0x8001_xxxx"| MMIO
+            Interconnect <-->|"Port A  0x8000_xxxx"| SharedMem
             MU <-->|"Port B"| SharedMem
 
-            Dispatcher -->|"start / block_id"| Core0
-            Dispatcher -->|"start / block_id"| Core1
-            Core0 --- ClusterSync
-            Core1 --- ClusterSync
+            Dispatcher -->|"start · block_id"| Core0
+            Dispatcher -->|"start · block_id"| Core1
+            Core0 & Core1 --- ClusterSync
         end
 
-        DataMemCtrl["Data Memory Controller<br/>(mem_controller.sv)<br/>Multi-Channel Arbiter"]
-        ProgMemCtrl["Program Memory Controller<br/>(mem_controller.sv)<br/>Read-Only Arbiter"]
+        DataMemCtrl["Data Mem Controller\nmulti-channel"]:::ctrl
+        ProgMemCtrl["Program Mem Controller\nread-only"]:::ctrl
 
-        Interconnect -->|"Global range<br/>&lt; 0x8000_0000"| DataMemCtrl
-        Fetch0 -->|"instruction fetch"| ProgMemCtrl
-        Fetch1 -->|"instruction fetch"| ProgMemCtrl
+        Interconnect -->|"global  < 0x8000_0000"| DataMemCtrl
+        Core0 & Core1 -.->|"instr fetch"| ProgMemCtrl
     end
 
-    DataMem[("Data Memory<br/>(External)")]
-    InstrMem[("Instruction Memory<br/>(External)")]
+    DataMem[("Data Memory")]:::ext
+    InstrMem[("Instr Memory")]:::ext
 
     DataMemCtrl <--> DataMem
     ProgMemCtrl <--> InstrMem
@@ -108,50 +88,51 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph Inputs ["Host Interface"]
-        direction LR
-        Host["start · kernel_config\n(num_blocks, num_warps_per_block,\nbase_instructions_address)"]
-    end
+    classDef host fill:#4f46e5,stroke:#3730a3,color:#fff,font-weight:bold
+    classDef state fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef decision fill:#d97706,stroke:#b45309,color:#fff
+    classDef action fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef done fill:#16a34a,stroke:#15803d,color:#fff
+    classDef core fill:#6b7280,stroke:#4b5563,color:#fff
 
-    subgraph Disp ["Dispatcher (dispatcher.sv)"]
+    Host(["🖥 Host\nstart · kernel_config"]):::host
+
+    subgraph Disp ["Dispatcher  ·  dispatcher.sv"]
         direction TB
 
-        subgraph State ["Internal State"]
+        subgraph State [" State Registers "]
             direction LR
-            BD["blocks_dispatched"]
-            BDone["blocks_done"]
-            TotalBlocks["total_blocks\n= kernel_config.num_blocks"]
+            BD["blocks_dispatched"]:::state
+            BDone["blocks_done"]:::state
+            Total["total_blocks"]:::state
         end
 
-        subgraph FSM ["Dispatch Logic (per cycle)"]
+        subgraph FSM [" Dispatch FSM "]
             direction TB
-            CheckReset{"Core just\nreset?"}
-            HasWork{"blocks_dispatched\n< total_blocks?"}
-            Assign["Assign block_id\nassert core_start"]
-            CheckDone{"core_done[i]\nasserted?"}
-            ResetCore["Reset core\nblocks_done++"]
-            KernelDone{"blocks_done\n== total_blocks?"}
-            Done["done ← 1"]
+            CheckReset{"core reset?"}:::decision
+            HasWork{"work remaining?"}:::decision
+            Assign["assign block_id\nassert core_start"]:::action
+            CheckDone{"core_done?"}:::decision
+            ResetCore["reset core\nblocks_done++"]:::action
+            KernelDone{"all done?"}:::decision
+            Done["done ← 1"]:::done
 
-            CheckReset -->|"Yes"| HasWork
-            HasWork -->|"Yes"| Assign
-            HasWork -->|"No"| CheckDone
-            CheckReset -->|"No"| CheckDone
-            CheckDone -->|"Yes"| ResetCore
+            CheckReset -->|"yes"| HasWork
+            CheckReset -->|"no"| CheckDone
+            HasWork -->|"yes"| Assign
+            HasWork -->|"no"| CheckDone
+            CheckDone -->|"yes"| ResetCore
             ResetCore --> KernelDone
-            KernelDone -->|"Yes"| Done
+            KernelDone -->|"yes"| Done
         end
     end
 
-    subgraph Cores ["Compute Cores (NUM_CORES)"]
-        direction LR
-        CoreCtrl["core_start · core_reset\ncore_block_id · core_done"]
-    end
+    CoreCtrl["Compute Cores\ncore_start · core_done"]:::core
 
     Host --> State
     State --> FSM
     FSM --> CoreCtrl
-    CoreCtrl -->|"core_done feedback"| FSM
+    CoreCtrl -->|"core_done"| FSM
 ```
 
 The Dispatcher (`dispatcher.sv`) is the GPU-level work scheduler that maps thread blocks from a kernel launch onto available hardware cores. On `start`, it resets all cores and begins dispatching — assigning a unique `block_id` to each free core and asserting `core_start`. When a core signals `core_done`, the dispatcher resets it and dispatches the next pending block (if any remain). Once `blocks_done == total_blocks`, the kernel is complete. Think of it as a work queue: if the kernel requires 10 blocks but only 2 cores exist, the dispatcher feeds blocks to cores as they become free, 2 at a time, until all 10 are done.
@@ -162,61 +143,46 @@ The Dispatcher (`dispatcher.sv`) is the GPU-level work scheduler that maps threa
 
 ```mermaid
 flowchart TB
-    subgraph External ["External Interfaces"]
-        direction LR
-        Dispatcher["Dispatcher\n(core_start, core_reset,\ncore_block_id, kernel_config)"]
-        ProgMemCtrl["Program Memory Controller\n(instruction fetch channels)"]
-        DataMemCtrl["Data Memory Controller\n(global read/write channels)"]
-    end
+    classDef ext fill:#6b7280,stroke:#4b5563,color:#fff
+    classDef core fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef ctrl fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef mem fill:#e11d48,stroke:#be123c,color:#fff
+    classDef accel fill:#d97706,stroke:#b45309,color:#fff
 
-    subgraph VirgoCluster ["Virgo Cluster (virgo_cluster.sv)"]
+    Dispatcher["Dispatcher"]:::ext
+    ProgMemCtrl["Program Mem Ctrl"]:::ext
+    DataMemCtrl["Data Mem Ctrl"]:::ext
+
+    subgraph VirgoCluster ["Virgo Cluster  ·  virgo_cluster.sv"]
         direction TB
 
-        subgraph Cores ["1. SIMT Sub-Cores (× CORES_PER_CLUSTER)"]
+        subgraph Cores [" ① SIMT Cores "]
             direction LR
-            Core0["Compute Core 0\n(compute_core.sv)\nWarps · Fetcher · Decoder\nALU · Reg Files · LSUs"]
-            Core1["Compute Core 1\n(compute_core.sv)"]
+            Core0["Core 0\nwarps · fetch · decode\nALU · RF · LSU"]:::core
+            Core1["Core 1"]:::core
         end
 
-        Interconnect["2. Cluster Interconnect\n(cluster_interconnect.sv)\nAddress Decode · SM Arbiter · MMIO Arbiter\nResponse Demux"]
-
-        SharedMem["3. Shared Memory\n(shared_memory.sv)\nDual-Port SRAM\n(MEM_WORDS × DATA_WIDTH)"]
-
-        MatrixCtrl["4. Matrix Controller\n(matrix_controller.sv)\nMMIO Register File\nSync Barrier"]
-
-        MatrixUnit["5. Matrix Unit\n(matrix_unit.sv)\nSystolic Array\n(MAX_DIM=8)"]
-
-        ClusterSync["6. Cluster Sync\n(cluster_sync.sv)\ncore_done aggregation\nmatrix_ready status"]
+        Interconnect["② Interconnect\naddr decode · arbitration · demux"]:::ctrl
+        SharedMem[("③ Shared Memory\ndual-port SRAM")]:::mem
+        MatrixCtrl["④ Matrix Controller\nMMIO regs · sync barrier"]:::accel
+        MatrixUnit["⑤ Matrix Unit\nsystolic array · 8×8 max"]:::accel
+        ClusterSync["⑥ Cluster Sync"]:::ctrl
     end
 
-    %% Dispatcher → Cores
-    Dispatcher -->|"start / reset\nblock_id / kernel_config"| Core0
-    Dispatcher -->|"start / reset\nblock_id / kernel_config"| Core1
+    Dispatcher -->|"start · block_id"| Core0 & Core1
+    Core0 & Core1 -.->|"instr fetch"| ProgMemCtrl
+    Core0 & Core1 -->|"LSU r/w"| Interconnect
 
-    %% Cores → Program Memory Controller (instruction fetches)
-    Core0 -->|"instruction fetch\n(WARPS_PER_CORE channels)"| ProgMemCtrl
-    Core1 -->|"instruction fetch"| ProgMemCtrl
+    Interconnect -->|"global"| DataMemCtrl
+    Interconnect <-->|"Port A"| SharedMem
+    Interconnect <-->|"MMIO"| MatrixCtrl
 
-    %% Cores → Interconnect (LSU requests)
-    Core0 -->|"LSU read/write\n(THREADS+1 per core)"| Interconnect
-    Core1 -->|"LSU read/write"| Interconnect
+    MatrixCtrl -->|"start · dims · addrs"| MatrixUnit
+    MatrixUnit -->|"busy · done"| MatrixCtrl
+    MatrixUnit <-->|"Port B"| SharedMem
 
-    %% Interconnect routing
-    Interconnect -->|"addr < 0x8000_0000\nGlobal (pass-through)"| DataMemCtrl
-    Interconnect <-->|"0x8000_xxxx\nPort A"| SharedMem
-    Interconnect <-->|"0x8001_xxxx\nMMIO"| MatrixCtrl
-
-    %% Matrix Controller ↔ Matrix Unit
-    MatrixCtrl -->|"start, accumulate,\nclear_acc, dims, addrs"| MatrixUnit
-    MatrixUnit -->|"busy, done,\ncycle_count"| MatrixCtrl
-
-    %% Matrix Unit ↔ Shared Memory Port B
-    MatrixUnit <-->|"Port B\n(dedicated read/write)"| SharedMem
-
-    %% Cluster Sync
-    Core0 --- ClusterSync
-    Core1 --- ClusterSync
-    MatrixUnit -->|"busy / done"| ClusterSync
+    Core0 & Core1 --- ClusterSync
+    MatrixUnit -.->|"status"| ClusterSync
 ```
 
 The Virgo Cluster (`virgo_cluster.sv`) is the top-level Streaming Multiprocessor (SM) equivalent in the Virgo architecture. Each cluster integrates six sub-blocks:
@@ -234,69 +200,65 @@ The Virgo Cluster (`virgo_cluster.sv`) is the top-level Streaming Multiprocessor
 
 ```mermaid
 flowchart TB
-    subgraph External ["External Interfaces"]
-        direction LR
-        Dispatcher["Dispatcher\n(start, reset, block_id,\nkernel_config)"]
-        InstrMem["Program Memory Controller\n(instruction fetch)"]
-        Interconnect["Cluster Interconnect\n(data read/write)"]
-    end
+    classDef ext fill:#6b7280,stroke:#4b5563,color:#fff
+    classDef sched fill:#4f46e5,stroke:#3730a3,color:#fff
+    classDef pipe fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef rf fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef exec fill:#d97706,stroke:#b45309,color:#fff
+    classDef fsm fill:#7c3aed,stroke:#6d28d9,color:#fff
 
-    subgraph ComputeCore ["Compute Core (compute_core.sv)"]
+    Dispatcher["Dispatcher"]:::ext
+    InstrMem["Program Mem Ctrl"]:::ext
+    Interconnect["Cluster Interconnect"]:::ext
+
+    subgraph ComputeCore ["Compute Core  ·  compute_core.sv"]
         direction TB
 
-        WarpSched["Warp Scheduler\nRound-robin selection\n(skip IDLE / FETCH / DONE)"]
+        WarpSched["Warp Scheduler\nround-robin"]:::sched
 
-        subgraph PerWarp ["Per-Warp Circuitry (× WARPS_PER_CORE)"]
+        subgraph PerWarp [" Per-Warp Circuitry  ×  WARPS_PER_CORE "]
             direction LR
-            Fetcher["Fetcher\n(fetcher.sv)\nIDLE → REQUESTING →\nWAITING → DONE"]
-            Decoder["Decoder\n(decoder.sv)\nSingle-cycle decode"]
-            ScalarRF["Scalar Reg File\n(scalar_reg_file.sv)\nexec mask, scalar rs1/rs2"]
-            VectorRF["Vector Reg File\n(reg_file.sv)\n32 regs × THREADS\nrs1/rs2 per thread"]
+            Fetcher["Fetcher"]:::pipe
+            Decoder["Decoder"]:::pipe
+            ScalarRF["Scalar RF\nexec mask · scalars"]:::rf
+            VectorRF["Vector RF\n32 regs × threads"]:::rf
         end
 
-        subgraph SharedHW ["Shared Hardware (× THREADS_PER_WARP)"]
+        subgraph SharedHW [" Shared Execution Units "]
             direction LR
-            ALUs["ALU Array\n(alu.sv × THREADS)\n+ 1 Scalar ALU"]
-            LSUs["LSU Array\n(lsu.sv × THREADS)\n+ 1 Scalar LSU"]
+            ALUs["ALU × threads\n+ 1 scalar"]:::exec
+            LSUs["LSU × threads\n+ 1 scalar"]:::exec
         end
 
-        subgraph WarpFSM ["Warp State Machine"]
+        subgraph WarpFSM [" Warp FSM "]
             direction LR
-            IDLE(["IDLE"])
-            FETCH(["FETCH"])
-            DECODE(["DECODE"])
-            REQUEST(["REQUEST"])
-            WAIT(["WAIT"])
-            EXECUTE(["EXECUTE"])
-            UPDATE(["UPDATE"])
-            DONE(["DONE"])
+            IDLE(["IDLE"]):::fsm
+            FETCH(["FETCH"]):::fsm
+            DECODE(["DECODE"]):::fsm
+            REQUEST(["REQ"]):::fsm
+            WAIT(["WAIT"]):::fsm
+            EXECUTE(["EXEC"]):::fsm
+            UPDATE(["UPD"]):::fsm
+            DONE(["DONE"]):::fsm
+
             IDLE -->|"start"| FETCH
-            FETCH -->|"fetcher done"| DECODE
-            DECODE --> REQUEST
-            REQUEST --> WAIT
-            WAIT -->|"all LSUs ready"| EXECUTE
-            EXECUTE --> UPDATE
+            FETCH --> DECODE --> REQUEST --> WAIT
+            WAIT -->|"LSUs ready"| EXECUTE --> UPDATE
+            UPDATE -->|"next"| FETCH
             UPDATE -->|"halt"| DONE
-            UPDATE -->|"next instr"| FETCH
         end
     end
 
-    Dispatcher -->|"start / block_id\nkernel_config"| WarpSched
-    WarpSched -->|"current_warp"| PerWarp
-    Fetcher -->|"instruction"| Decoder
-    Decoder -->|"decoded fields"| ScalarRF
-    Decoder -->|"decoded fields"| VectorRF
-    ScalarRF -->|"scalar rs1/rs2"| ALUs
-    VectorRF -->|"vector rs1/rs2"| ALUs
-    VectorRF -->|"vector rs1/rs2"| LSUs
-    ScalarRF -->|"scalar rs1/rs2"| LSUs
-    ALUs -->|"alu_out"| VectorRF
-    ALUs -->|"scalar_alu_out"| ScalarRF
-    LSUs -->|"lsu_out"| VectorRF
-    LSUs -->|"scalar_lsu_out"| ScalarRF
+    Dispatcher -->|"start · config"| WarpSched
+    WarpSched --> PerWarp
+    Fetcher --> Decoder
+    Decoder --> ScalarRF & VectorRF
+    ScalarRF & VectorRF --> ALUs & LSUs
+    ALUs -->|"writeback"| VectorRF & ScalarRF
+    LSUs -->|"writeback"| VectorRF & ScalarRF
 
-    Fetcher <-->|"instruction fetch\n(per-warp channel)"| InstrMem
-    LSUs <-->|"data read/write\n(THREADS+1 channels)"| Interconnect
+    Fetcher <-.->|"instr fetch"| InstrMem
+    LSUs <-->|"data r/w"| Interconnect
 ```
 
 The Compute Core (`compute_core.sv`) is the SIMT execution engine. Each core contains:
@@ -313,23 +275,27 @@ The Compute Core (`compute_core.sv`) is the SIMT execution engine. Each core con
 
 ```mermaid
 flowchart LR
-    subgraph Fetcher ["Fetcher (fetcher.sv)"]
-        direction LR
-        IDLE(["FETCHER_IDLE"])
-        FETCHING(["FETCHER_FETCHING"])
-        DONE_F(["FETCHER_DONE"])
+    classDef fsm fill:#7c3aed,stroke:#6d28d9,color:#fff
+    classDef ext fill:#6b7280,stroke:#4b5563,color:#fff
 
-        IDLE -->|"warp_state == WARP_FETCH\nassert mem_read_valid\naddress ← PC"| FETCHING
-        FETCHING -->|"mem_read_ready\nlatch instruction"| DONE_F
-        DONE_F -->|"warp_state == WARP_DECODE"| IDLE
+    WarpCtrl(["Warp State"]):::ext
+
+    subgraph Fetcher ["Fetcher  ·  fetcher.sv"]
+        direction LR
+        IDLE(["IDLE"]):::fsm
+        FETCHING(["FETCHING"]):::fsm
+        DONE_F(["DONE"]):::fsm
+
+        IDLE -->|"warp in FETCH\nassert read_valid"| FETCHING
+        FETCHING -->|"mem ready\nlatch instr"| DONE_F
+        DONE_F -->|"warp advances"| IDLE
     end
 
-    ProgMem["Program Memory\n(via mem_controller)"]
-    WarpCtrl["Warp State\n(from compute_core)"]
+    ProgMem(["Program Memory"]):::ext
 
-    WarpCtrl -->|"warp_state, PC"| IDLE
-    FETCHING <-->|"read_valid / ready\nread_address / data"| ProgMem
-    DONE_F -->|"fetched instruction"| WarpCtrl
+    WarpCtrl -->|"state · PC"| IDLE
+    FETCHING <-->|"addr / data"| ProgMem
+    DONE_F -->|"instruction"| WarpCtrl
 ```
 
 The Fetcher (`fetcher.sv`) is a lightweight 3-state FSM that retrieves a single instruction from program memory for its warp. In `IDLE`, it waits until the warp enters `WARP_FETCH`, then asserts `mem_read_valid` with the current PC. In `FETCHING`, it waits for the program memory controller to respond with `mem_read_ready` and latches the instruction data. In `DONE`, it holds the instruction until the warp advances to `WARP_DECODE`, then returns to idle. Each warp has its own dedicated fetcher instance, enabling multiple warps to fetch instructions in parallel — this is the foundation of the core's latency-hiding mechanism.
@@ -340,63 +306,57 @@ The Fetcher (`fetcher.sv`) is a lightweight 3-state FSM that retrieves a single 
 
 ```mermaid
 flowchart TB
-    subgraph Control ["Control Interface (from Matrix Controller)"]
-        direction LR
-        CtrlIn["start · accumulate · clear_acc\ndim_m · dim_n · dim_k\naddr_a · addr_b · addr_c"]
-    end
+    classDef ctrl fill:#4f46e5,stroke:#3730a3,color:#fff
+    classDef fsm fill:#7c3aed,stroke:#6d28d9,color:#fff
+    classDef acc fill:#d97706,stroke:#b45309,color:#fff
+    classDef mem fill:#e11d48,stroke:#be123c,color:#fff
+    classDef status fill:#0d9488,stroke:#0f766e,color:#fff
 
-    subgraph MatrixUnit ["Matrix Unit (matrix_unit.sv)"]
+    CtrlIn(["Matrix Controller\nstart · dims · addrs"]):::ctrl
+
+    subgraph MatrixUnit ["Matrix Unit  ·  matrix_unit.sv"]
         direction TB
 
-        Latch["Latch Control Registers\nreg_m, reg_n, reg_k\nreg_addr_a/b/c\nreg_accumulate"]
+        Latch["Latch Registers"]:::ctrl
 
-        subgraph Accumulator ["Internal Accumulator"]
-            ACC["acc[MAX_DIM][MAX_DIM]\nSigned MAC Array\n(clear on start or clear_acc)"]
+        subgraph Accumulator [" Accumulator "]
+            ACC["acc M×N\nsigned MAC array"]:::acc
         end
 
-        subgraph FSM ["State Machine"]
+        subgraph FSM [" GEMM State Machine "]
             direction LR
-            IDLE(["ST_IDLE"])
-            READ_A(["ST_READ_A"])
-            WAIT_A(["ST_WAIT_A"])
-            READ_B(["ST_READ_B"])
-            WAIT_B(["ST_WAIT_B\nacc += A × B"])
-            WRITE_C(["ST_WRITE_C"])
-            WAIT_C(["ST_WAIT_C"])
-            DONE_ST(["ST_DONE"])
+            IDLE(["IDLE"]):::fsm
+            READ_A(["READ A"]):::fsm
+            WAIT_A(["WAIT A"]):::fsm
+            READ_B(["READ B"]):::fsm
+            WAIT_B(["WAIT B\nacc += A·B"]):::fsm
+            WRITE_C(["WRITE C"]):::fsm
+            WAIT_C(["WAIT C"]):::fsm
+            DONE_ST(["DONE"]):::fsm
 
             IDLE -->|"start"| READ_A
-            READ_A -->|"assert read_valid\naddr = addr_a + offset"| WAIT_A
-            WAIT_A -->|"mem_read_ready\nlatch elem_a"| READ_B
-            READ_B -->|"assert read_valid\naddr = addr_b + offset"| WAIT_B
-            WAIT_B -->|"mem_read_ready\nMAC: acc[i][j] += elem_a × elem_b"| READ_A
-            WAIT_B -->|"k,j,i loops done"| WRITE_C
-            WRITE_C -->|"assert write_valid\ndata = acc[i][j]"| WAIT_C
-            WAIT_C -->|"mem_write_ready\nadvance i,j"| WRITE_C
-            WAIT_C -->|"all elements written"| DONE_ST
-            DONE_ST -->|"busy←0, done←1"| IDLE
+            READ_A --> WAIT_A -->|"latch A"| READ_B
+            READ_B --> WAIT_B
+            WAIT_B -->|"next k"| READ_A
+            WAIT_B -->|"loops done"| WRITE_C
+            WRITE_C --> WAIT_C
+            WAIT_C -->|"next elem"| WRITE_C
+            WAIT_C -->|"all written"| DONE_ST
+            DONE_ST --> IDLE
         end
 
-        LoopCtrl["Triple-Nested Loop Control\nfor i in [0,M)\n  for j in [0,N)\n    for k in [0,K)"]
-        Profiler["Cycle Counter\n(cycle_count)"]
+        LoopCtrl["Loop Control\ni ∈ [0,M) · j ∈ [0,N) · k ∈ [0,K)"]:::ctrl
+        Profiler["Cycle Counter"]:::status
     end
 
-    subgraph MemPort ["Shared Memory (Port B)"]
-        SM["mem_read_valid / ready / data\nmem_write_valid / ready / data"]
-    end
+    SM[("Shared Memory\nPort B")]:::mem
+    Status(["Status\nbusy · done · cycles"]):::status
 
-    subgraph StatusOut ["Status (to Matrix Controller)"]
-        Status["busy · done · cycle_count"]
-    end
-
-    CtrlIn --> Latch
-    Latch --> FSM
+    CtrlIn --> Latch --> FSM
     LoopCtrl --> FSM
     FSM --> ACC
-    FSM <-->|"read A, read B,\nwrite C"| SM
-    FSM --> Profiler
-    Profiler --> Status
-    FSM --> Status
+    FSM <-->|"read A/B · write C"| SM
+    FSM & Profiler --> Status
 ```
 
 The Matrix Unit (`matrix_unit.sv`) is a systolic-array-based compute engine dedicated to General Matrix Multiply-Accumulate (GEMM). It reads tile data (matrices A and B) from shared memory via Port B, performs the multiply-accumulate through a configurable M×N×K pipeline, and writes the result (matrix C) back. An internal accumulator can be preserved across invocations (`accumulate` mode) or cleared (`clear_acc`), enabling tiled outer-product loops. A cycle counter tracks operation latency.
@@ -407,57 +367,58 @@ The Matrix Unit (`matrix_unit.sv`) is a systolic-array-based compute engine dedi
 
 ```mermaid
 flowchart TB
-    subgraph Inputs ["From Cluster Interconnect (MMIO Slave)"]
-        direction LR
-        WR["mmio_write_valid<br/>mmio_write_address<br/>mmio_write_data"]
-        RD["mmio_read_valid<br/>mmio_read_address"]
-    end
+    classDef input fill:#6b7280,stroke:#4b5563,color:#fff
+    classDef reg fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef logic fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef decision fill:#d97706,stroke:#b45309,color:#fff
+    classDef output fill:#4f46e5,stroke:#3730a3,color:#fff
+    classDef ok fill:#16a34a,stroke:#15803d,color:#fff
 
-    subgraph Controller ["Matrix Controller (matrix_controller.sv)"]
+    WR(["MMIO Write"]):::input
+    RD(["MMIO Read"]):::input
+
+    subgraph Controller ["Matrix Controller  ·  matrix_controller.sv"]
         direction TB
 
-        subgraph RegFile ["MMIO Register File"]
+        subgraph RegFile [" Register File "]
             direction LR
-            CTRL["REG_CTRL (0x0000)<br/>[0] START<br/>[1] ACCUMULATE<br/>[2] CLEAR_ACC"]
-            STATUS["REG_STATUS (0x0004)<br/>[0] BUSY<br/>[1] DONE (sticky)"]
-            DIMS["REG_DIM_M/N/K<br/>(0x0008 / 0x000C / 0x0010)<br/>Tile dimensions [3:0]"]
-            ADDRS["REG_ADDR_A/B/C<br/>(0x0014 / 0x0018 / 0x001C)<br/>Shared mem offsets"]
-            CYCLES["REG_CYCLES (0x0020)<br/>Cycle counter"]
-            SYNC["REG_SYNC (0x0024)<br/>HW Barrier: stalls<br/>read_ready while busy"]
+            CTRL["CTRL 0x00\nstart · acc · clear"]:::reg
+            STATUS["STATUS 0x04\nbusy · done"]:::reg
+            DIMS["DIMS 0x08–10\nM · N · K"]:::reg
+            ADDRS["ADDRS 0x14–1C\nA · B · C"]:::reg
+            CYCLES["CYCLES 0x20"]:::reg
+            SYNC["SYNC 0x24\nhw barrier"]:::reg
         end
 
-        WriteLogic["Write Decode<br/>Address → Register Update<br/>(single-cycle ack)"]
-        ReadLogic["Read Decode<br/>Address → Register Readback"]
-        SyncLogic{"SYNC Read?"}
-        BusyCheck{"mu_busy?"}
+        WriteLogic["Write Decode"]:::logic
+        ReadLogic["Read Decode"]:::logic
+        SyncLogic{"SYNC read?"}:::decision
+        BusyCheck{"MU busy?"}:::decision
     end
+
+    ReadOut(["read_ready ✓"]):::ok
 
     WR --> WriteLogic
-    WriteLogic --> CTRL
-    WriteLogic --> DIMS
-    WriteLogic --> ADDRS
-    WriteLogic --> STATUS
+    WriteLogic --> CTRL & DIMS & ADDRS & STATUS
 
     RD --> SyncLogic
-    SyncLogic -->|Yes| BusyCheck
-    BusyCheck -->|"Busy → stall<br/>(hold ready low)"| SyncLogic
-    BusyCheck -->|"Not busy → ack"| ReadOut["mmio_read_ready ✓<br/>mmio_read_data"]
-    SyncLogic -->|No| ReadLogic
-    ReadLogic --> ReadOut
+    SyncLogic -->|"yes"| BusyCheck
+    BusyCheck -->|"busy → stall"| SyncLogic
+    BusyCheck -->|"free → ack"| ReadOut
+    SyncLogic -->|"no"| ReadLogic --> ReadOut
 
-    subgraph MU ["To Matrix Unit (matrix_unit.sv)"]
+    subgraph MU [" Matrix Unit Interface "]
         direction LR
-        CtrlOut["mu_start (pulse)<br/>mu_accumulate<br/>mu_clear_acc (pulse)"]
-        DimsOut["mu_dim_m/n/k"]
-        AddrsOut["mu_addr_a/b/c"]
-        StatusIn["mu_busy<br/>mu_done<br/>mu_cycle_count"]
+        CtrlOut["start · acc · clear"]:::output
+        DimsOut["dims M/N/K"]:::output
+        AddrsOut["addrs A/B/C"]:::output
+        StatusIn["busy · done · cycles"]:::output
     end
 
-    CTRL -->|"start / clear_acc<br/>(auto-clear pulses)"| CtrlOut
+    CTRL --> CtrlOut
     DIMS --> DimsOut
     ADDRS --> AddrsOut
-    StatusIn -->|"feedback"| STATUS
-    StatusIn -->|"feedback"| CYCLES
+    StatusIn -->|"feedback"| STATUS & CYCLES
     StatusIn --> BusyCheck
 ```
 
@@ -469,62 +430,62 @@ The Matrix Controller (`matrix_controller.sv`) is an MMIO slave that exposes the
 
 ```mermaid
 flowchart TB
-    subgraph CoreLSUs ["Core LSUs (NUM_LSUS)"]
+    classDef input fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef decode fill:#d97706,stroke:#b45309,color:#fff
+    classDef arb fill:#7c3aed,stroke:#6d28d9,color:#fff
+    classDef dest fill:#e11d48,stroke:#be123c,color:#fff
+    classDef demux fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef ext fill:#6b7280,stroke:#4b5563,color:#fff
+
+    subgraph CoreLSUs [" Core LSUs "]
         direction LR
-        RReq["core_read_valid<br/>core_read_address"]
-        WReq["core_write_valid<br/>core_write_address<br/>core_write_data"]
+        RReq["read requests"]:::input
+        WReq["write requests"]:::input
     end
 
-    subgraph Interconnect ["Cluster Interconnect (cluster_interconnect.sv)"]
+    subgraph Interconnect ["Cluster Interconnect  ·  cluster_interconnect.sv"]
         direction TB
 
-        AddrDecode{"Address Decode<br/>per-LSU"}
+        AddrDecode{"Address Decode"}:::decode
 
-        subgraph SMArb ["Shared Memory Arbiter"]
-            direction TB
-            SM_IDLE(["ARB_IDLE"])
-            SM_SR(["ARB_SERVING_READ"])
-            SM_SW(["ARB_SERVING_WRITE"])
-            SM_IDLE -->|"write req found<br/>(priority)"| SM_SW
-            SM_IDLE -->|"read req found"| SM_SR
-            SM_SR -->|"sm_read_ready"| SM_IDLE
-            SM_SW -->|"sm_write_ready"| SM_IDLE
+        subgraph SMArb [" SM Arbiter "]
+            direction LR
+            SM_IDLE(["IDLE"]):::arb
+            SM_SR(["SERVE RD"]):::arb
+            SM_SW(["SERVE WR"]):::arb
+            SM_IDLE -->|"write"| SM_SW
+            SM_IDLE -->|"read"| SM_SR
+            SM_SR & SM_SW -->|"ready"| SM_IDLE
         end
 
-        subgraph MMIOArb ["MMIO Arbiter"]
-            direction TB
-            MM_IDLE(["ARB_IDLE"])
-            MM_SR(["ARB_SERVING_READ"])
-            MM_SW(["ARB_SERVING_WRITE"])
-            MM_IDLE -->|"write req found<br/>(priority)"| MM_SW
-            MM_IDLE -->|"read req found"| MM_SR
-            MM_SR -->|"mmio_read_ready"| MM_IDLE
-            MM_SW -->|"mmio_write_ready"| MM_IDLE
+        subgraph MMIOArb [" MMIO Arbiter "]
+            direction LR
+            MM_IDLE(["IDLE"]):::arb
+            MM_SR(["SERVE RD"]):::arb
+            MM_SW(["SERVE WR"]):::arb
+            MM_IDLE -->|"write"| MM_SW
+            MM_IDLE -->|"read"| MM_SR
+            MM_SR & MM_SW -->|"ready"| MM_IDLE
         end
 
-        Demux["Response Demux<br/>Route ready & data<br/>back to requesting LSU"]
+        Demux["Response Demux"]:::demux
     end
 
-    RReq --> AddrDecode
-    WReq --> AddrDecode
+    RReq & WReq --> AddrDecode
 
-    AddrDecode -->|"addr < 0x8000_0000<br/>Global Memory"| ExtMem["Global Memory Controller<br/>(pass-through)"]
-    AddrDecode -->|"0x8000_0000 – 0x8000_0FFF<br/>Shared Memory"| SMArb
-    AddrDecode -->|"0x8001_0000 – 0x8001_00FF<br/>MMIO"| MMIOArb
+    ExtMem["Global Mem Ctrl"]:::ext
+    SM[("Shared Memory\nPort A")]:::dest
+    MMIO["Matrix Controller"]:::dest
 
-    subgraph Destinations ["Cluster-Local Ports"]
-        direction LR
-        SM["Shared Memory<br/>(Port A)"]
-        MMIO["Matrix Controller<br/>(MMIO Slave)"]
-    end
+    AddrDecode -->|"< 0x8000_0000"| ExtMem
+    AddrDecode -->|"0x8000_xxxx"| SMArb
+    AddrDecode -->|"0x8001_xxxx"| MMIOArb
 
-    SMArb <-->|"sm_read/write"| SM
-    MMIOArb <-->|"mmio_read/write"| MMIO
+    SMArb <--> SM
+    MMIOArb <--> MMIO
 
-    SM --> Demux
-    MMIO --> Demux
-    ExtMem --> Demux
-    Demux -->|"core_read_ready<br/>core_read_data<br/>core_write_ready"| CoreLSUs
+    SM & MMIO & ExtMem --> Demux
+    Demux -->|"ready · data"| CoreLSUs
 ```
 
 The Cluster Interconnect (`cluster_interconnect.sv`) demultiplexes memory requests from all core LSUs based on address:
@@ -541,20 +502,19 @@ The **response demux** routes `ready` and `data` signals back to the specific LS
 ### Shared Memory
 
 ```mermaid
-flowchart TB
-    subgraph Clients ["Memory Clients"]
-        direction LR
-        PortA["SIMT Cores<br/>(via Cluster Interconnect)"]
-        PortB["Matrix Unit<br/>(Dedicated Path)"]
+flowchart LR
+    classDef client fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef mem fill:#e11d48,stroke:#be123c,color:#fff
+
+    PortA(["SIMT Cores\nvia interconnect"]):::client
+    PortB(["Matrix Unit\ndedicated path"]):::client
+
+    subgraph SharedMem ["Shared Memory  ·  shared_memory.sv"]
+        Bank[("Dual-Port SRAM\nMEM_WORDS × DATA_WIDTH")]:::mem
     end
 
-    subgraph SharedMem ["Shared Memory (shared_memory.sv)"]
-        direction TB
-        Bank["Dual-Port SRAM Array<br/>(MEM_WORDS x DATA_WIDTH)"]
-    end
-
-    PortA <-->|"Port A<br/>core_read/write_valid<br/>address, data, ready"| Bank
-    PortB <-->|"Port B<br/>mu_read_valid<br/>address, data, ready"| Bank
+    PortA <-->|"Port A"| Bank
+    PortB <-->|"Port B"| Bank
 ```
 
 The Shared Memory (`shared_memory.sv`) provides a high-throughput, low-latency dual-ported scratchpad memory local to each cluster. Port A is mapped to the cluster interconnect and serves read and write requests from the SIMT cores. Port B provides a dedicated read-only path directly to the Matrix Unit, ensuring that matrix data tiles can be streamed into the systolic array without interfering with core memory operations or arbitration bottlenecks.
@@ -565,34 +525,35 @@ The Shared Memory (`shared_memory.sv`) provides a high-throughput, low-latency d
 
 ```mermaid
 flowchart TB
-    subgraph Consumers ["Consumers (NUM_CONSUMERS)"]
-        direction LR
-        C_Req["consumer_read_valid<br/>consumer_write_valid<br/>address & data"]
-    end
+    classDef consumer fill:#2563eb,stroke:#1d4ed8,color:#fff
+    classDef arb fill:#d97706,stroke:#b45309,color:#fff
+    classDef fsm fill:#7c3aed,stroke:#6d28d9,color:#fff
+    classDef ext fill:#6b7280,stroke:#4b5563,color:#fff
 
-    subgraph MemCtrl ["Memory Controller (mem_controller.sv)"]
+    C_Req(["Consumers\nfetchers / LSUs"]):::consumer
+
+    subgraph MemCtrl ["Memory Controller  ·  mem_controller.sv"]
         direction TB
-        Arbiter{"Channel Arbiter<br/>(NUM_CHANNELS)"}
-        
-        subgraph FSMs ["Channel FSMs"]
+        Arbiter{"Channel Arbiter\nNUM_CHANNELS"}:::arb
+
+        subgraph FSMs [" Channel FSMs "]
             direction LR
-            IDLE(["IDLE"])
-            WAITING(["WAITING<br/>(READ/WRITE)"])
-            RELAYING(["RELAYING<br/>(READ/WRITE)"])
-            IDLE -->|"request found"| WAITING
-            WAITING -->|"mem_ready"| RELAYING
-            RELAYING -->|"consumer ack"| IDLE
+            IDLE(["IDLE"]):::fsm
+            WAITING(["WAITING"]):::fsm
+            RELAYING(["RELAYING"]):::fsm
+            IDLE -->|"request"| WAITING
+            WAITING -->|"mem ready"| RELAYING
+            RELAYING -->|"ack"| IDLE
         end
-        Arbiter -->|"Assigns requests to<br/>available channels"| FSMs
+
+        Arbiter -->|"assign to channel"| FSMs
     end
 
-    subgraph External ["External Memory Interface"]
-        Mem["Global Memory Channel"]
-    end
+    Mem(["External Memory"]):::ext
 
     C_Req --> Arbiter
-    FSMs <-->|"mem_read/write_valid<br/>address, data, ready"| Mem
-    FSMs -->|"consumer_ready<br/>consumer_read_data"| Consumers
+    FSMs <-->|"r/w valid · data · ready"| Mem
+    FSMs -->|"data · ready"| C_Req
 ```
 
 The Memory Controller (`mem_controller.sv`) manages concurrent accesses to global memory (both instruction and data memory) from numerous consumers (Fetchers or LSUs). It instantiates multiple memory channels (`NUM_CHANNELS`) and tracks their state using independent FSMs. When a channel is idle, it scans the consumers to find a pending read or write request, locks onto it, and dispatches it to the external memory interface. Once the memory responds, the channel relays the data or acknowledgment back to the specific consumer and waits for a consumer acknowledgment before returning to the idle state.

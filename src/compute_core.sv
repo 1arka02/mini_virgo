@@ -4,7 +4,7 @@
 `include "common.sv"
 
 module compute_core#(
-    parameter int WARPS_PER_CORE = 10,            // Number of warps to in each core
+    parameter int WARPS_PER_CORE = 4,            // Number of warps to in each core
     parameter int THREADS_PER_WARP = 32          // Number of threads per warp (max 32)
     )(
     input wire clk,

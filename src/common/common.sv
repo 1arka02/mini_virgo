@@ -173,5 +173,6 @@ endfunction
 `define VIRGO_REG_ADDR_C        32'h8001_001C  // Shared memory word offset for matrix C
 `define VIRGO_REG_CYCLES        32'h8001_0020  // Matrix unit cycle counter
 `define VIRGO_REG_SYNC          32'h8001_0024  // Hardware barrier/sync: holds ready low while busy
+`define VIRGO_REG_PRECISION     32'h8001_0028  // [1:0] 0=INT32, 1=INT8x4, 2=FP8x4
 
 `endif // COMMON_SV
